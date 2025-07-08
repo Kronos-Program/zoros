@@ -1,0 +1,4 @@
+default_level: INFO
+suppress_debug: false
+modules:
+  source.interfaces.intake.main: INFO

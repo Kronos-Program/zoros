@@ -1,0 +1,5 @@
+name: demo_plugin
+entry_point: demo_plugin.cli
+description: Demo plugin for tests
+commands:
+  - say_hello

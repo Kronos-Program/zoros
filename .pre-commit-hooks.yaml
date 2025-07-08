@@ -1,0 +1,103 @@
+# ZorOS Pre-commit Hooks Configuration
+# Automatic validation and fixing for code quality issues
+
+repos:
+  - repo: local
+    hooks:
+      # Circular Import Detection
+      - id: circular-imports
+        name: Check for circular imports
+        entry: python -m pytest tests/test_circular_imports.py::test_no_circular_imports -v
+        language: system
+        types: [python]
+        files: ^source/.*\.py$
+        pass_filenames: false
+        
+      - id: import-analysis
+        name: Analyze import structure
+        entry: python -m pytest tests/test_circular_imports.py::test_analyze_problematic_modules -v -s
+        language: system
+        types: [python]
+        files: ^source/.*\.py$
+        pass_filenames: false
+        stages: [manual]
+        
+      # Code Quality Checks
+      - id: python-syntax-check
+        name: Check Python syntax
+        entry: python -m py_compile
+        language: system
+        types: [python]
+        
+      - id: check-import-order
+        name: Check import order (simple)
+        entry: python -c "
+import ast
+import sys
+from pathlib import Path
+
+def check_import_order(file_path):
+    with open(file_path, 'r') as f:
+        content = f.read()
+    
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return []
+    
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            imports.append((node.lineno, type(node).__name__))
+    
+    issues = []
+    for i in range(1, len(imports)):
+        if imports[i][0] < imports[i-1][0]:
+            continue  # Later import, OK
+        # Check for import blocks being mixed
+        prev_type = imports[i-1][1]
+        curr_type = imports[i][1]
+        if prev_type != curr_type and abs(imports[i][0] - imports[i-1][0]) == 1:
+            issues.append(f'Line {imports[i][0]}: Mixed import types')
+    
+    return issues
+
+for file_path in sys.argv[1:]:
+    issues = check_import_order(file_path)
+    if issues:
+        print(f'{file_path}:')
+        for issue in issues:
+            print(f'  {issue}')
+        sys.exit(1)
+"
+        language: system
+        types: [python]
+        
+  # Standard pre-commit hooks  
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: debug-statements
+        
+  # Python-specific checks
+  - repo: https://github.com/psf/black
+    rev: 23.3.0
+    hooks:
+      - id: black
+        args: [--line-length=88]
+        types: [python]
+        
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args: [--profile=black]
+        types: [python]

@@ -1,0 +1,29 @@
+:root.dark-theme {
+  --bg-main: #0f1c11;
+  --bg-alt: #15221a;
+  --green-dark: #0d3f26;
+  --green: #21d07a;
+  --green-light: #3be285;
+  --text-main: #e4fce8;
+  --text-muted: #a6c7b3;
+  --gold: #f4c542;
+  --blue: #42a5f5;
+  --violet: #a982f5;
+  --error-red: #f25c54;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+}
+
+button {
+  background-color: var(--green-dark);
+  color: var(--text-main);
+  border: 1px solid var(--green);
+  padding: 4px 8px;
+}
+
+button:hover {
+  background-color: var(--green);
+}

@@ -1,0 +1,5 @@
+binary_path: ~/code/whisper.cpp/build/main
+model_path: ./models/ggml-base.bin
+default_beam_size: 5
+enable_lexicon: true
+default_prompt: ""

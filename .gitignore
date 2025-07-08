@@ -1,0 +1,101 @@
+# Local data (already present)
+data/
+docs/projects/
+docs/unparsed_chats/
+!docs/tasks/tasks_index.json
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*/__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# External Repos
+repos/
+
+# C extensions
+*.so
+
+# Virtual environments
+.env
+.env/
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# IDE-specific settings
+.vscode/
+.cursor/
+.cursorrules
+.claude/
+
+# Agent development files
+.agents/
+
+# macOS system files
+.DS_Store
+
+# Python egg metadata and build artifacts
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Test, coverage, and profiling output
+.coverage
+.tox/
+.nox/
+.cache/
+.pytest_cache/
+htmlcov/
+
+# Local data, logs, and user output
+*.log
+*.sqlite3
+*.db
+*.bak
+*.tmp
+audio/
+
+# User data and runtime artifacts
+*.pid
+artifacts/
+artifacts/tasks/
+artifacts/tasks/*
+
+# Node.js (if any JS/React UI is added)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS junk files
+Thumbs.db
+ehthumbs.db
+Icon?
+coder-env/*
+!coder-env/requirements.txt
+
+# Revision and agent logs (Task 063)
+artifacts/revisions/
+artifacts/agent_logs/
+!source/interfaces/intake/assets/
+# Local temp data
+logs/
+temp1/
+temp2/
+tmp_test/
+# User settings
+config/
+!config/intake_settings.json
+!source/config/whisper.yaml
+!source/config/
+whisper.cpp/

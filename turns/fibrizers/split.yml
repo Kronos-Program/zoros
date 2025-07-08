@@ -1,0 +1,5 @@
+turn_id: fibrizer_split
+handler: source.orchestration.fibrizers.split_fibrizer.SplitFibrizer
+input_schema: Fiber
+output_schema: Fiber[]
+

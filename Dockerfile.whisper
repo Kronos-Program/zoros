@@ -1,0 +1,46 @@
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies for audio processing
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    portaudio19-dev \
+    ffmpeg \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for Whisper
+RUN pip install --no-cache-dir \
+    faster-whisper \
+    openai-whisper \
+    torch \
+    torchaudio \
+    fastapi \
+    uvicorn \
+    numpy \
+    soundfile
+
+# Copy Whisper service files
+COPY source/dictation_backends/ ./source/dictation_backends/
+COPY scripts/whisper_service.py .
+
+# Create models directory
+RUN mkdir -p /app/models
+
+# Expose port
+EXPOSE 8001
+
+# Set environment variables
+ENV MODEL_SIZE=base
+ENV DEVICE=cpu
+ENV CACHE_DIR=/app/models
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8001/health || exit 1
+
+# Run the Whisper service
+CMD ["python", "whisper_service.py"]

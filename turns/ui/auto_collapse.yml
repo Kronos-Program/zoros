@@ -1,0 +1,4 @@
+turn_id: ui.auto_collapse
+handler: tool:auto-collapse
+args:
+  thread_id: thread-example

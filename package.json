@@ -1,0 +1,19 @@
+{
+  "name": "zoros",
+  "type": "module",
+  "scripts": {
+    "build:whisper": "tsc -p source/services/whisper/tsconfig.json",
+    "test": "npm run build:whisper && tsc -p zoros-frontend/tsconfig.json && node --test source/services/whisper/dist/__tests__/transcriptionService.test.js ui_tests/fiber_*test.js",
+    "test:ui": "node --test ui_tests/cliForm.test.js"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "@vitejs/plugin-react": "^4.5.1",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

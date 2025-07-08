@@ -1,0 +1,17 @@
+default_backend: gemini
+backends:
+  openai:
+    type: openai
+    api_key_source: keyring
+    rate_limit_per_minute: 60
+  lmos:
+    url: http://localhost:8080
+  gemini:
+    type: gemini
+    api_key_source: env
+    rate_limit_per_minute: 60
+rate_limits:
+  openai:
+    rpm: 500
+    retries: 3
+    backoff: exponential

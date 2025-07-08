@@ -1,0 +1,55 @@
+networks:
+  zoros-network:
+    driver: bridge
+services:
+  whisper-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.whisper
+    environment:
+    - MODEL_SIZE=base
+    - DEVICE=cpu
+    ports:
+    - 8001:8001
+    volumes:
+    - whisper-models:/app/models
+  zoros-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    depends_on:
+    - zoros-db
+    environment:
+    - PYTHONPATH=/app
+    - ZOROS_ENV=docker
+    ports:
+    - 8000:8000
+    volumes:
+    - ./source:/app/source:ro
+    - ./backend:/app/backend:ro
+    - zoros-data:/app/data
+  zoros-db:
+    environment:
+    - POSTGRES_DB=zoros
+    - POSTGRES_USER=zoros
+    - POSTGRES_PASSWORD=zoros_dev
+    image: postgres:15-alpine
+    ports:
+    - 5432:5432
+    volumes:
+    - postgres-data:/var/lib/postgresql/data
+  zoros-frontend:
+    build:
+      context: ./zoros-frontend
+      dockerfile: Dockerfile
+    depends_on:
+    - zoros-backend
+    environment:
+    - REACT_APP_API_BASE_URL=http://localhost:8000
+    ports:
+    - 3000:3000
+version: '3.8'
+volumes:
+  postgres-data: {}
+  whisper-models: {}
+  zoros-data: {}

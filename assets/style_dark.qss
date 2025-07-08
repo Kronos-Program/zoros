@@ -1,0 +1,27 @@
+/* ZOROS Dark Theme */
+QWidget {
+    background-color: #0f1c11;
+    color: #e4fce8;
+}
+
+QPushButton {
+    background-color: #0d3f26;
+    color: #e4fce8;
+    border: 1px solid #21d07a;
+    padding: 4px 8px;
+}
+
+QPushButton:hover {
+    background-color: #21d07a;
+}
+
+QLineEdit, QTextEdit {
+    background-color: #15221a;
+    color: #e4fce8;
+    border: 1px solid #21d07a;
+}
+
+QStatusBar {
+    background-color: #0d3f26;
+    color: #e4fce8;
+}

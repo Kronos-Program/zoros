@@ -1,0 +1,11 @@
+.zone {
+  flex: 1;
+  border: 2px dashed #999;
+  padding: 1rem;
+  text-align: center;
+}
+.highlight {
+  composes: zone;
+  border-color: blue;
+  background: rgba(0, 0, 255, 0.1);
+}

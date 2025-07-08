@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+import subprocess
+import sys
+import re
+from pathlib import Path
+
+TASK_FILE = Path('docs/tasks_list.md')
+MERGE_HEAD = Path('.git/MERGE_HEAD')
+
+if not MERGE_HEAD.exists():
+    sys.exit(0)
+
+changed = subprocess.run(
+    ['git', 'diff', '--name-only', 'HEAD', 'MERGE_HEAD', '--', str(TASK_FILE)],
+    capture_output=True, text=True,
+).stdout.strip()
+if not changed:
+    sys.exit(0)
+
+conflict = subprocess.run(
+    ['git', 'diff', '--name-only', '--diff-filter=U', '--', str(TASK_FILE)],
+    capture_output=True, text=True,
+).stdout.strip()
+if conflict:
+    print('Task registry conflict detected. Please run `scripts/resolve_task_conflict.py`.', file=sys.stderr)
+    sys.exit(1)
+
+
+def parse(text: str):
+    tasks = {}
+    current = None
+    for line in text.splitlines():
+        m = re.match(r'^### Task ID: (\S+)', line)
+        if m:
+            current = m.group(1)
+            tasks[current] = [line]
+            continue
+        m = re.match(r'^## (\S+)', line)
+        if m:
+            current = m.group(1)
+            tasks[current] = [line]
+            continue
+        if current:
+            tasks[current].append(line)
+    return tasks
+
+ours = subprocess.check_output(['git', 'show', f'HEAD:{TASK_FILE}'], text=True)
+theirs = subprocess.check_output(['git', 'show', f'MERGE_HEAD:{TASK_FILE}'], text=True)
+our_tasks = parse(ours)
+their_tasks = parse(theirs)
+
+conflicting = []
+for tid in our_tasks:
+    if tid in their_tasks and our_tasks[tid] != their_tasks[tid]:
+        ours_block = '\n'.join(our_tasks[tid])
+        theirs_block = '\n'.join(their_tasks[tid])
+        # allow differences only in Status, Agent Notes, or Last Updated lines
+        pattern = re.compile(r'^(Status:|\*\*Agent Notes:\*\*|Last Updated:).+', re.MULTILINE)
+        ours_clean = pattern.sub('', ours_block)
+        theirs_clean = pattern.sub('', theirs_block)
+        if ours_clean.strip() == theirs_clean.strip():
+            # merge preferring both sets of notes
+            notes = [l for l in our_tasks[tid] if l.startswith('- *')]
+            for l in their_tasks[tid]:
+                if l.startswith('- *') and l not in notes:
+                    notes.append(l)
+            merged_block = []
+            for l in our_tasks[tid]:
+                if l.startswith('- *'):
+                    continue
+                merged_block.append(l)
+            if notes:
+                merged_block.extend(notes)
+            our_tasks[tid] = merged_block
+        else:
+            conflicting.append(tid)
+if conflicting:
+    print('Task registry conflict detected. Please run `scripts/resolve_task_conflict.py`.', file=sys.stderr)
+    sys.exit(1)
+
+merged = our_tasks | their_tasks
+lines = ['# Zoros Task Registry', '']
+added = set()
+for tid in our_tasks:
+    lines.extend(our_tasks[tid])
+    lines.append('')
+    added.add(tid)
+for tid in their_tasks:
+    if tid not in added:
+        lines.extend(their_tasks[tid])
+        lines.append('')
+TASK_FILE.write_text('\n'.join(lines).rstrip() + '\n', encoding='utf-8')
+subprocess.run(['git', 'add', str(TASK_FILE)])

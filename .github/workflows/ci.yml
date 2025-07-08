@@ -1,0 +1,16 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Regenerate PROJECT_DOCS.txt
+        run: |
+          python3.11 scripts/merge_docs.py
+          git diff --exit-code docs/PROJECT_DOCS.txt || (echo 'PROJECT_DOCS.txt is out of sync; please run scripts/merge_docs.py locally.' && exit 1)
+      - run: pip install -r requirements.txt
+      - run: pytest -q
