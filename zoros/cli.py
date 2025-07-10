@@ -880,6 +880,116 @@ def routine(
         _cprint(f"Error: {e}", "red")
 
 
+@app.command(name="backend-status")
+def backend_status(
+    backend: str = typer.Argument("", help="Specific backend to check (optional)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show verbose output"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
+    test: bool = typer.Option(False, "--test", help="Test loading the backend"),
+    instantiate: bool = typer.Option(False, "--instantiate", help="Also try to instantiate the backend"),
+) -> None:
+    """Check dictation backend availability and status."""
+    try:
+        from source.dictation_backends.registry import get_backend_registry
+        import json
+        
+        registry = get_backend_registry()
+        
+        if backend:
+            # Check specific backend
+            is_available = registry.is_backend_available(backend)
+            info = registry.get_backend_info(backend)
+            
+            if json_output:
+                result = {
+                    "backend": backend,
+                    "available": is_available,
+                    "info": info.__dict__ if info else None
+                }
+                if not is_available:
+                    failed_backends = registry.get_failed_backends()
+                    result["error"] = failed_backends.get(backend, "Unknown backend")
+                print(json.dumps(result, indent=2))
+            else:
+                if is_available:
+                    _cprint(f"✓ Backend '{backend}' is available", "green")
+                    if info and verbose:
+                        _cprint(f"  Description: {info.description}", "")
+                        _cprint(f"  Dependencies: {', '.join(info.dependencies) if info.dependencies else 'None'}", "")
+                        if info.platform_requirements:
+                            _cprint(f"  Platform requirements: {', '.join(info.platform_requirements)}", "")
+                else:
+                    _cprint(f"✗ Backend '{backend}' is not available", "red")
+                    if info:
+                        failed_backends = registry.get_failed_backends()
+                        error = failed_backends.get(backend, "Unknown error")
+                        _cprint(f"  Error: {error}", "red")
+                        if verbose:
+                            _cprint(f"  Description: {info.description}", "")
+                            _cprint(f"  Dependencies: {', '.join(info.dependencies) if info.dependencies else 'None'}", "")
+                            if info.platform_requirements:
+                                _cprint(f"  Platform requirements: {', '.join(info.platform_requirements)}", "")
+                    else:
+                        _cprint(f"  Unknown backend: {backend}", "red")
+            
+            if test and is_available:
+                try:
+                    backend_class = registry.get_backend_class(backend)
+                    _cprint(f"✓ Successfully loaded backend '{backend}'", "green")
+                    _cprint(f"  Class: {backend_class.__name__}", "")
+                    _cprint(f"  Module: {backend_class.__module__}", "")
+                    
+                    if instantiate:
+                        try:
+                            # Try to instantiate with a default model
+                            backend_instance = backend_class("tiny")
+                            _cprint(f"  ✓ Successfully instantiated backend", "green")
+                        except Exception as e:
+                            _cprint(f"  ✗ Failed to instantiate backend: {e}", "red")
+                            
+                except Exception as e:
+                    _cprint(f"✗ Failed to load backend '{backend}': {e}", "red")
+        else:
+            # Show overall status
+            status = registry.get_backend_status()
+            
+            if json_output:
+                print(json.dumps(status, indent=2))
+            else:
+                _cprint("Backend Status Report", "green")
+                _cprint("=" * 50, "")
+                _cprint(f"Total backends defined: {status['total_defined']}", "")
+                _cprint(f"Available backends: {status['total_available']}", "green")
+                _cprint(f"Failed backends: {status['total_failed']}", "red")
+                print()
+                
+                if status['available']:
+                    _cprint("✓ Available Backends:", "green")
+                    for backend_info in status['available']:
+                        _cprint(f"  • {backend_info['name']}: {backend_info['description']}", "")
+                        if verbose:
+                            _cprint(f"    Dependencies: {', '.join(backend_info['dependencies']) if backend_info['dependencies'] else 'None'}", "")
+                            if backend_info['platform_requirements']:
+                                _cprint(f"    Platform requirements: {', '.join(backend_info['platform_requirements'])}", "")
+                    print()
+                
+                if status['failed']:
+                    _cprint("✗ Failed Backends:", "red")
+                    for backend_info in status['failed']:
+                        _cprint(f"  • {backend_info['name']}: {backend_info['description']}", "")
+                        _cprint(f"    Error: {backend_info['error']}", "red")
+                        if verbose:
+                            _cprint(f"    Dependencies: {', '.join(backend_info['dependencies']) if backend_info['dependencies'] else 'None'}", "")
+                            if backend_info['platform_requirements']:
+                                _cprint(f"    Platform requirements: {', '.join(backend_info['platform_requirements'])}", "")
+                    print()
+                    
+    except ImportError as e:
+        _cprint(f"Backend system not available: {e}", "red")
+    except Exception as e:
+        _cprint(f"Error: {e}", "red")
+
+
 def run() -> None:
     """Main CLI entry point using Typer."""
     app()

@@ -56,16 +56,17 @@ try:  # optional requests
 except Exception:  # pragma: no cover - fallback
     requests = None
 from source.dictation_backends import (
-    FasterWhisperBackend,
-    StandardOpenAIWhisperBackend,
-    WhisperCPPBackend,
-    MLXWhisperBackend,
-    LiveMLXWhisperBackend,
+    get_backend_class,
     get_available_backends,
+    is_backend_available,
+    check_backend,
 )
-from source.dictation_backends.live_chunk_processor import LiveChunkProcessor
-from source.dictation_backends.parallel_mlx_whisper_backend import ParallelMLXWhisperBackend
-from source.dictation_backends.realtime_streaming_backend import RealtimeStreamingBackend
+# Optional imports for specialized backends - these will be loaded via registry
+try:
+    from source.dictation_backends.live_chunk_processor import LiveChunkProcessor
+    LIVE_CHUNK_PROCESSOR_AVAILABLE = True
+except ImportError:
+    LIVE_CHUNK_PROCESSOR_AVAILABLE = False
 from source.core.models.fiber import Fiber
 try:
     from source.interfaces.dictation_stability import get_stability_manager
@@ -958,27 +959,19 @@ class Recorder:
             raise
 
 
-BACKEND_MAP: dict[str, Callable[[str], object]] = {
-    "WhisperCPP": WhisperCPPBackend,
-    "FasterWhisper": FasterWhisperBackend,
-    "StandardOpenAIWhisper": StandardOpenAIWhisperBackend,
-    "MLXWhisper": MLXWhisperBackend,
-    "LiveMLXWhisper": LiveMLXWhisperBackend,
-    "ParallelMLXWhisper": ParallelMLXWhisperBackend,
-    "RealtimeStreamingMLXWhisper": RealtimeStreamingBackend,
-}
-try:  # optional imports
-    from source.dictation_backends import OpenAIAPIBackend
-
-    BACKEND_MAP["OpenAIAPI"] = OpenAIAPIBackend
-except Exception:  # pragma: no cover - optional
-    pass
-try:
-    from source.dictation_backends import MockBackend
-
-    BACKEND_MAP["Mock"] = MockBackend
-except Exception:  # pragma: no cover - optional
-    pass
+def get_backend_map() -> dict[str, Callable[[str], object]]:
+    """Get available backend classes using the registry system."""
+    backend_map = {}
+    available_backends = get_available_backends()
+    
+    for backend_name in available_backends:
+        try:
+            backend_class = get_backend_class(backend_name)
+            backend_map[backend_name] = backend_class
+        except Exception as e:
+            logger.warning(f"Failed to load backend {backend_name}: {e}")
+    
+    return backend_map
 
 
 def test_audio_device(device: Optional[int] = None) -> bool:
@@ -1167,7 +1160,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
             
         elif backend == "OpenAIAPI":
             print("DEBUG: Trying OpenAIAPI backend...")
-            from source.dictation_backends import OpenAIAPIBackend
+            OpenAIAPIBackend = get_backend_class("OpenAIAPI")
             fb = OpenAIAPIBackend(model)
             timing_data['backend_initialization'] = time.time() - init_start
             
@@ -1195,7 +1188,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
             
         elif backend == "WhisperCPP":
             print("DEBUG: Trying WhisperCPP backend...")
-            from source.dictation_backends import WhisperCPPBackend
+            WhisperCPPBackend = get_backend_class("WhisperCPP")
             backend_instance = WhisperCPPBackend(model)
             timing_data['backend_initialization'] = time.time() - init_start
             
@@ -1207,7 +1200,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
             
         elif backend == "Mock":
             print("DEBUG: Using Mock backend...")
-            from source.dictation_backends import MockBackend
+            MockBackend = get_backend_class("Mock")
             backend_instance = MockBackend(model)
             timing_data['backend_initialization'] = time.time() - init_start
             
@@ -1949,9 +1942,10 @@ class IntakeWindow(QMainWindow):
             return
         
         # Load new model
-        backend_class = BACKEND_MAP.get(self.whisper_backend)
-        if not backend_class:
-            self.show_status("Backend unavailable", error=True)
+        try:
+            backend_class = get_backend_class(self.whisper_backend)
+        except (ImportError, ValueError) as e:
+            self.show_status(f"Backend unavailable: {e}", error=True)
             return
         try:
             print(f"DEBUG: Loading new model {cache_key}")
