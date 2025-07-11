@@ -117,15 +117,70 @@ def tui_loop(_engine: subprocess.Popen[Any]) -> int:
 # ----- Typer CLI commands -----
 
 @app.command()
-def intake(headless: bool = typer.Option(False, help="Run without display")) -> None:
+def intake(
+    headless: bool = typer.Option(False, help="Run without display"),
+    kill: bool = typer.Option(False, help="Kill running intake processes"),
+    background: bool = typer.Option(False, help="Run in background (advanced)")
+) -> None:
     """Launch the PySide intake UI."""
+    if kill:
+        # Kill existing intake processes
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "source.interfaces.intake.main"], 
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    if pid:
+                        subprocess.run(["kill", pid])
+                        _cprint(f"Killed intake process {pid}", "yellow")
+            else:
+                _cprint("No intake processes found", "yellow")
+        except Exception as exc:
+            _cprint(f"Error killing processes: {exc}", "red")
+        return
+    
     logger.info("Launching intake UI")
     if headless or os.getenv("ZOROS_HEADLESS") or not has_display():
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    
     try:
-        import importlib
-        intake_main = importlib.import_module("source.interfaces.intake.main")
-        intake_main.main()
+        if background:
+            # Launch in background mode (old behavior)
+            cmd = [sys.executable, "-m", "source.interfaces.intake.main"]
+            if headless:
+                cmd.append("--headless")
+            
+            proc = subprocess.Popen(cmd, 
+                                  stdout=subprocess.DEVNULL, 
+                                  stderr=subprocess.DEVNULL)
+            
+            _cprint("✅ Intake UI launched in background", "green")
+            _cprint(f"Process ID: {proc.pid}", "")
+            _cprint("Use 'zoros intake --kill' to stop the UI", "")
+            return
+        else:
+            # Launch in foreground mode - user can see UI and terminal output
+            import importlib
+            intake_main = importlib.import_module("source.interfaces.intake.main")
+            
+            # Set up sys.argv properly for the intake main function
+            original_argv = sys.argv[:]
+            sys.argv = [sys.argv[0]]
+            if headless:
+                sys.argv.append("--headless")
+            
+            try:
+                logger.info("Opening intake UI (foreground mode)")
+                _cprint("🚀 Launching intake UI...", "green")
+                _cprint("Press Ctrl+C or close the UI window to exit", "")
+                intake_main.main()
+            finally:
+                # Restore original argv
+                sys.argv = original_argv
+        
     except Exception as exc:  # pragma: no cover - optional dependency
         logger.error("Intake UI failed: %s", exc)
         _cprint("Intake UI not available", "red")

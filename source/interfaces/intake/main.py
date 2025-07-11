@@ -29,6 +29,7 @@ Example usage:
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import tempfile
 import threading
@@ -3308,7 +3309,16 @@ def main() -> None:
         action="store_true",
         help="Use light theme instead of dark",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without display (for testing)",
+    )
     args = parser.parse_args()
+
+    # Set headless mode if requested
+    if args.headless:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
     app = QApplication([])
     if not args.light_theme:
@@ -3316,6 +3326,8 @@ def main() -> None:
         if theme_path.exists():
             app.setStyleSheet(theme_path.read_text())
     win = IntakeWindow(unified=args.unified_ui)
+    # Center the window on screen
+    win.move(100, 100)  # Move to a visible position
     win.show()
     app.exec()
 
