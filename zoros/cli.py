@@ -97,7 +97,12 @@ def has_display() -> bool:
     """Return True if a graphical display is available."""
     if sys.platform.startswith("win"):
         return True
-    return bool(os.getenv("DISPLAY"))
+    elif sys.platform == "darwin":
+        # macOS always has a display when running in Terminal
+        return True
+    else:
+        # Linux/Unix - check for X11 DISPLAY variable
+        return bool(os.getenv("DISPLAY"))
 
 
 def tui_loop(_engine: subprocess.Popen[Any]) -> int:
@@ -148,21 +153,25 @@ def intake(
     
     try:
         if background:
-            # Launch in background mode (old behavior)
+            # Launch in background mode (old behavior) - with visible output
+            _cprint("⚠️  Background mode selected", "yellow")
             cmd = [sys.executable, "-m", "source.interfaces.intake.main"]
             if headless:
                 cmd.append("--headless")
             
-            proc = subprocess.Popen(cmd, 
-                                  stdout=subprocess.DEVNULL, 
-                                  stderr=subprocess.DEVNULL)
+            # Allow terminal output to be visible
+            proc = subprocess.Popen(cmd)
             
             _cprint("✅ Intake UI launched in background", "green")
             _cprint(f"Process ID: {proc.pid}", "")
             _cprint("Use 'zoros intake --kill' to stop the UI", "")
+            _cprint("Note: UI window should be visible on your screen", "blue")
             return
         else:
             # Launch in foreground mode - user can see UI and terminal output
+            _cprint("🚀 Launching intake UI in foreground mode...", "green")
+            _cprint("This may take a moment to load dependencies...", "yellow")
+            
             import importlib
             intake_main = importlib.import_module("source.interfaces.intake.main")
             
@@ -174,16 +183,25 @@ def intake(
             
             try:
                 logger.info("Opening intake UI (foreground mode)")
-                _cprint("🚀 Launching intake UI...", "green")
-                _cprint("Press Ctrl+C or close the UI window to exit", "")
+                _cprint("✅ UI dependencies loaded, showing window...", "green")
+                _cprint("Press Ctrl+C or close the UI window to exit", "blue")
+                
+                # macOS-specific environment setup
+                if sys.platform == "darwin":
+                    os.environ.setdefault("QT_MAC_WANTS_LAYER", "1")
+                
                 intake_main.main()
             finally:
                 # Restore original argv
                 sys.argv = original_argv
+                _cprint("Intake UI closed", "yellow")
         
+    except KeyboardInterrupt:
+        _cprint("Intake UI interrupted by user", "yellow")
     except Exception as exc:  # pragma: no cover - optional dependency
         logger.error("Intake UI failed: %s", exc)
-        _cprint("Intake UI not available", "red")
+        _cprint(f"Intake UI failed: {exc}", "red")
+        _cprint("Try running with --background flag if you continue to have issues", "yellow")
         sys.exit(1)
 
 

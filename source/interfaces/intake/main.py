@@ -309,8 +309,9 @@ class ResourceMonitor:
     def __init__(self):
         self.initial_memory = _mem_usage_mb()
         self.initial_threads = threading.active_count()
-        self.max_memory_increase = 500  # MB threshold
-        self.max_thread_increase = 10  # Thread threshold
+        # Adjust thresholds for ML models (MLX Whisper can use 1-3GB)
+        self.max_memory_increase = 3000  # MB threshold - accommodate ML models
+        self.max_thread_increase = 15  # Thread threshold
         
     def check_leaks(self) -> Dict[str, Any]:
         """Check for resource leaks and return status."""
@@ -882,7 +883,7 @@ class Recorder:
         
         self.frames = []
         self.level = 0.0
-        self.recording_start_time = time.time()
+        self.recording_start_time = perf_counter()  # Use perf_counter for consistency
         
         if device is not None:
             self.device = device
@@ -1352,6 +1353,9 @@ class IntakeWindow(QMainWindow):
         self.setWindowTitle("Zoros Intake")
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         
+        # Track window creation time for debugging premature closes
+        self._window_creation_time = time.time()
+        
         # Set window icon with enhanced Mac compatibility
         self._setup_window_icon()
         self.db_path = db_path
@@ -1628,13 +1632,20 @@ class IntakeWindow(QMainWindow):
     def _emergency_health_check(self) -> None:
         """Emergency health check for critical issues."""
         try:
-            # Check for hung recording states
+            # Check for hung recording states - use consistent timing
             if (hasattr(self, 'recording_start_time') and 
                 self.record_btn.text() == "Stop" and 
-                (time.time() - getattr(self, 'recording_start_time', time.time())) > 300):  # 5 minutes
-                print(f"EMERGENCY: Recording hung for >5 minutes - forcing recovery")
-                self._recording_stuck_detected = True
-                self._force_recording_recovery()
+                self.recording_start_time is not None):
+                
+                # Use perf_counter for consistency with UI timing
+                current_duration = perf_counter() - self.recording_start_time
+                print(f"DEBUG: Recording duration check: {current_duration:.1f}s")
+                
+                # Only trigger emergency after 5 minutes (300 seconds)
+                if current_duration > 300:
+                    print(f"EMERGENCY: Recording hung for >{current_duration:.1f}s - forcing recovery")
+                    self._recording_stuck_detected = True
+                    self._force_recording_recovery()
             
             # Check for stuck transcription
             if (hasattr(self, 'transcribe_start') and 
@@ -3228,6 +3239,15 @@ class IntakeWindow(QMainWindow):
         """Handle window close event with proper cleanup."""
         print(f"DEBUG: closeEvent called, cleaning up resources...")
         
+        # Check if this is an immediate close (less than 5 seconds after window creation)
+        if hasattr(self, '_window_creation_time'):
+            elapsed = time.time() - self._window_creation_time
+            if elapsed < 5.0:
+                print(f"DEBUG: WARNING - Window closing too quickly ({elapsed:.1f}s), might be premature")
+                # For debugging, we could ignore very quick closes
+                # event.ignore()
+                # return
+        
         try:
             # Cancel any pending transcription
             if hasattr(self, 'current_future') and self.current_future:
@@ -3316,19 +3336,241 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Import sys for platform detection (used throughout function)
+    import sys
+
     # Set headless mode if requested
     if args.headless:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    else:
+        # Force Qt to use the correct platform plugin for macOS
+        if sys.platform == "darwin":
+            # Ensure we're using the cocoa platform plugin on macOS
+            os.environ.setdefault("QT_QPA_PLATFORM", "cocoa")
+            # Remove any platform-specific settings that might interfere
+            os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
+            print("DEBUG: Set Qt platform to 'cocoa' for macOS")
 
     app = QApplication([])
+    
+    # Debug Qt platform information
+    print(f"DEBUG: Qt platform name: {app.platformName()}")
+    print(f"DEBUG: QT_QPA_PLATFORM env: {os.environ.get('QT_QPA_PLATFORM', 'not set')}")
+    
+    # Check if we have proper platform support
+    try:
+        from PySide6.QtGui import QGuiApplication
+        print(f"DEBUG: Primary screen: {QGuiApplication.primaryScreen()}")
+        if hasattr(app, 'supportsMultipleWindows'):
+            print(f"DEBUG: Supports multiple windows: {app.supportsMultipleWindows()}")
+    except Exception as e:
+        print(f"DEBUG: Platform info check failed: {e}")
+    
+    # macOS-specific: Ensure app can come to foreground
+    if sys.platform == "darwin":
+        try:
+            # Set app name for macOS dock/menu
+            app.setApplicationName("Zoros Intake")
+            app.setApplicationDisplayName("Zoros Intake")
+            
+            # Request foreground activation
+            from PySide6.QtCore import QTimer
+            def activate_window():
+                # QApplication doesn't have raise_() - only widgets do
+                try:
+                    if hasattr(win, 'raise_'):
+                        win.raise_()
+                    if hasattr(win, 'activateWindow'):
+                        win.activateWindow()
+                    # Try to bring to front using macOS specific calls
+                    try:
+                        import objc
+                        from AppKit import NSApp, NSApplication, NSWorkspace
+                        
+                        # Check if NSApp is properly initialized
+                        if NSApp is None:
+                            print("DEBUG: NSApp is None, trying to initialize")
+                            NSApp = NSApplication.sharedApplication()
+                            
+                        if NSApp and hasattr(NSApp, 'activateIgnoringOtherApps_'):
+                            # First try to activate the entire application
+                            NSApp.activateIgnoringOtherApps_(True)
+                            print("DEBUG: macOS NSApp activation called")
+                        else:
+                            print("DEBUG: NSApp activation method not available")
+                            
+                        # Alternative: try to activate current process
+                        import os
+                        current_pid = os.getpid()
+                        workspace = NSWorkspace.sharedWorkspace()
+                        running_apps = workspace.runningApplications()
+                        
+                        for app in running_apps:
+                            if app.processIdentifier() == current_pid:
+                                if hasattr(app, 'activateWithOptions_'):
+                                    app.activateWithOptions_(1)  # NSApplicationActivateIgnoringOtherApps
+                                    print("DEBUG: Process activation via NSWorkspace called")
+                                break
+                        
+                        # Try to get the native window handle and manipulate it
+                        if hasattr(win, 'winId'):
+                            window_id = win.winId()
+                            print(f"DEBUG: Got window ID: {window_id}")
+                            
+                            # Try alternative method using Quartz
+                            try:
+                                import Quartz
+                                # Get list of all windows
+                                window_list = Quartz.CGWindowListCopyWindowInfo(
+                                    Quartz.kCGWindowListOptionOnScreenOnly,
+                                    Quartz.kCGNullWindowID
+                                )
+                                print(f"DEBUG: Found {len(window_list)} windows on screen")
+                                
+                                # Look for our window
+                                for window_info in window_list:
+                                    if 'Zoros' in str(window_info.get('kCGWindowName', '')):
+                                        print(f"DEBUG: Found Zoros window: {window_info}")
+                                        
+                            except Exception as quartz_e:
+                                print(f"DEBUG: Quartz window search failed: {quartz_e}")
+                                
+                    except Exception as e:
+                        print(f"DEBUG: NSApp activation failed: {e}")
+                        
+                        # Final fallback - try using subprocess to activate
+                        try:
+                            import subprocess
+                            subprocess.run(['osascript', '-e', 'tell application "System Events" to set frontmost of first process whose name contains "Python" to true'], 
+                                         capture_output=True, timeout=2)
+                            print("DEBUG: AppleScript activation attempted")
+                        except Exception as script_e:
+                            print(f"DEBUG: AppleScript activation failed: {script_e}")
+                except Exception as e:
+                    print(f"DEBUG: Window activation failed: {e}")
+            
+            # Store activation function for later use
+            app._activate_window_func = activate_window
+        except Exception as e:
+            print(f"Warning: macOS activation failed: {e}")
+    
     if not args.light_theme:
         theme_path = ROOT_DIR / "assets" / "style_dark.qss"
         if theme_path.exists():
             app.setStyleSheet(theme_path.read_text())
+    
+    # Test Qt window creation first on macOS
+    if sys.platform == "darwin":
+        try:
+            # Create a simple test window to verify Qt windowing works
+            from PySide6.QtWidgets import QWidget
+            test_widget = QWidget()
+            test_widget.setWindowTitle("Qt Test Window")
+            test_widget.resize(200, 100)
+            test_widget.move(50, 50)
+            test_widget.show()
+            
+            print(f"DEBUG: Test window created - visible: {test_widget.isVisible()}")
+            print(f"DEBUG: Test window geometry: {test_widget.geometry()}")
+            
+            # Clean up test window after a moment
+            QTimer.singleShot(500, test_widget.close)
+            
+        except Exception as e:
+            print(f"DEBUG: Test window creation failed: {e}")
+    
     win = IntakeWindow(unified=args.unified_ui)
-    # Center the window on screen
+    
+    # Center the window on screen and ensure visibility
     win.move(100, 100)  # Move to a visible position
+    
+    # macOS-specific: Ensure window is created in visible space
+    if sys.platform == "darwin":
+        try:
+            # Try to position window on current desktop/space
+            from PySide6.QtGui import QGuiApplication
+            screen = QGuiApplication.primaryScreen()
+            if screen:
+                screen_geometry = screen.geometry()
+                # Position window in upper-left quadrant of screen
+                x = screen_geometry.width() // 4
+                y = screen_geometry.height() // 4
+                win.move(x, y)
+                print(f"DEBUG: Positioned window at {x}, {y} on screen {screen_geometry.width()}x{screen_geometry.height()}")
+        except Exception as e:
+            print(f"DEBUG: Screen positioning failed: {e}")
+    
     win.show()
+    print(f"DEBUG: Window shown, geometry: {win.geometry()}, visible: {win.isVisible()}")
+    
+    # Additional macOS visibility fixes
+    if sys.platform == "darwin":
+        # Call the stored activation function with window available
+        if hasattr(app, '_activate_window_func'):
+            app._activate_window_func()
+        
+        # Set window level to ensure it appears
+        try:
+            print("DEBUG: Setting window flags for visibility")
+            original_flags = win.windowFlags()
+            
+            # Try multiple Qt window attributes for macOS
+            try:
+                if hasattr(Qt, 'WA_MacFrameworkScaled'):
+                    win.setAttribute(Qt.WA_MacFrameworkScaled, True)
+                if hasattr(Qt, 'WA_NativeWindow'):
+                    win.setAttribute(Qt.WA_NativeWindow, True)
+                if hasattr(Qt, 'WA_ShowWithoutActivating'):
+                    win.setAttribute(Qt.WA_ShowWithoutActivating, False)  # Ensure it activates
+                print("DEBUG: Qt window attributes set successfully")
+            except Exception as attr_e:
+                print(f"DEBUG: Qt attributes failed: {attr_e}")
+            
+            # Set window flags to force it to appear (removed Qt.Tool as it can cause premature closing)
+            new_flags = original_flags | Qt.WindowStaysOnTopHint
+            win.setWindowFlags(new_flags)
+            win.show()  # Re-show with new flags
+            
+            # Force window state changes
+            win.setWindowState(Qt.WindowActive | Qt.WindowNoState)
+            win.raise_()
+            win.activateWindow()
+            
+            print(f"DEBUG: Window flags set - original: {original_flags}, new: {new_flags}")
+            
+            # Remove the hint after a delay so it doesn't stay on top forever
+            def reset_flags():
+                try:
+                    # Don't reset flags immediately - wait longer to ensure window is stable
+                    if win.isVisible():
+                        win.setWindowFlags(original_flags)
+                        win.show()
+                        print("DEBUG: Window flags reset")
+                        # Final status check
+                        print(f"DEBUG: Final window state - visible: {win.isVisible()}, minimized: {win.isMinimized()}, active: {win.isActiveWindow()}")
+                    else:
+                        print("DEBUG: Window not visible, skipping flag reset")
+                except Exception as e:
+                    print(f"DEBUG: Flag reset failed: {e}")
+            
+            # Also add a timer to continuously debug window state
+            def debug_window_state():
+                print(f"DEBUG: Window state check - visible: {win.isVisible()}, minimized: {win.isMinimized()}, active: {win.isActiveWindow()}")
+                print(f"DEBUG: Window geometry: {win.geometry()}")
+                if hasattr(win, 'windowState'):
+                    print(f"DEBUG: Window state flags: {win.windowState()}")
+            
+            QTimer.singleShot(1000, debug_window_state)
+            QTimer.singleShot(5000, reset_flags)  # Wait longer before resetting flags
+            QTimer.singleShot(6000, debug_window_state)
+            print("DEBUG: Window visibility setup complete")
+        except Exception as e:
+            print(f"Warning: Window flags adjustment failed: {e}")
+    else:
+        # For non-macOS systems
+        win.raise_()
+        win.activateWindow()
+    
     app.exec()
 
 
