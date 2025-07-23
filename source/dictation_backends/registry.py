@@ -54,7 +54,7 @@ class BackendRegistry:
             BackendInfo(
                 name="WhisperCPP",
                 class_name="WhisperCPPBackend",
-                module_path="source.dictation_backends.whisper_cpp_backend",
+                module_path="backend.services.dictation.whisper_cpp_backend",
                 dependencies=["whispercpp"],
                 description="Whisper.cpp backend with C++ optimization",
                 platform_requirements=["whisper-cli executable or whispercpp module"]
@@ -62,7 +62,7 @@ class BackendRegistry:
             BackendInfo(
                 name="FasterWhisper",
                 class_name="FasterWhisperBackend", 
-                module_path="source.dictation_backends.faster_whisper_backend",
+                module_path="backend.services.dictation.faster_whisper_backend",
                 dependencies=["faster_whisper", "torch"],
                 description="Faster Whisper backend with MPS acceleration",
                 platform_requirements=["macOS with MPS support"]
@@ -70,14 +70,14 @@ class BackendRegistry:
             BackendInfo(
                 name="StandardOpenAIWhisper",
                 class_name="StandardOpenAIWhisperBackend",
-                module_path="source.dictation_backends.standard_whisper_backend",
+                module_path="backend.services.dictation.standard_whisper_backend",
                 dependencies=["whisper"],
                 description="Standard OpenAI Whisper backend"
             ),
             BackendInfo(
                 name="OpenAIAPI",
                 class_name="OpenAIAPIBackend",
-                module_path="source.dictation_backends.openai_api_backend",
+                module_path="backend.services.dictation.openai_api_backend",
                 dependencies=["openai"],
                 description="OpenAI API backend for cloud transcription",
                 platform_requirements=["OPENAI_API_KEY environment variable"]
@@ -85,7 +85,7 @@ class BackendRegistry:
             BackendInfo(
                 name="MLXWhisper",
                 class_name="MLXWhisperBackend",
-                module_path="source.dictation_backends.mlx_whisper_backend",
+                module_path="backend.services.dictation.mlx_whisper_backend",
                 dependencies=["mlx_whisper"],
                 description="MLX Whisper backend for Apple Silicon",
                 platform_requirements=["macOS with Apple Silicon"]
@@ -93,7 +93,7 @@ class BackendRegistry:
             BackendInfo(
                 name="LiveMLXWhisper",
                 class_name="LiveMLXWhisperBackend",
-                module_path="source.dictation_backends.live_mlx_whisper_backend",
+                module_path="backend.services.dictation.live_mlx_whisper_backend",
                 dependencies=["mlx_whisper"],
                 description="Live MLX Whisper backend for real-time transcription",
                 platform_requirements=["macOS with Apple Silicon"]
@@ -101,7 +101,7 @@ class BackendRegistry:
             BackendInfo(
                 name="ParallelMLXWhisper",
                 class_name="ParallelMLXWhisperBackend",
-                module_path="source.dictation_backends.parallel_mlx_whisper_backend",
+                module_path="backend.services.dictation.parallel_mlx_whisper_backend",
                 dependencies=["mlx_whisper"],
                 description="Parallel MLX Whisper backend for concurrent processing",
                 platform_requirements=["macOS with Apple Silicon"]
@@ -109,7 +109,7 @@ class BackendRegistry:
             BackendInfo(
                 name="QueueBasedStreamingMLXWhisper",
                 class_name="QueueBasedStreamingBackend",
-                module_path="source.dictation_backends.queue_based_streaming_backend",
+                module_path="backend.services.dictation.queue_based_streaming_backend",
                 dependencies=["mlx_whisper"],
                 description="Queue-based streaming MLX Whisper backend",
                 platform_requirements=["macOS with Apple Silicon"]
@@ -117,7 +117,7 @@ class BackendRegistry:
             BackendInfo(
                 name="RealtimeStreamingMLXWhisper",
                 class_name="RealtimeStreamingBackend",
-                module_path="source.dictation_backends.realtime_streaming_backend",
+                module_path="backend.services.dictation.realtime_streaming_backend",
                 dependencies=["mlx_whisper"],
                 description="Real-time streaming MLX Whisper backend",
                 platform_requirements=["macOS with Apple Silicon"]
@@ -125,7 +125,7 @@ class BackendRegistry:
             BackendInfo(
                 name="Mock",
                 class_name="MockBackend",
-                module_path="source.dictation_backends.mock_backend",
+                module_path="backend.services.dictation.mock_backend",
                 dependencies=[],
                 description="Mock backend for testing and development"
             ),

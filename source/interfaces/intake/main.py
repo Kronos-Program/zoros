@@ -990,11 +990,41 @@ def test_audio_device(device: Optional[int] = None) -> bool:
         return False
 
 
+# Backend health tracking for circuit breaker pattern
+_backend_failure_counts = {}
+_backend_last_failure = {}
+
+def _should_skip_backend(backend: str) -> bool:
+    """Check if backend should be skipped due to recent failures."""
+    import time
+    
+    failure_count = _backend_failure_counts.get(backend, 0)
+    last_failure = _backend_last_failure.get(backend, 0)
+    
+    # Skip if more than 3 failures in last 5 minutes
+    if failure_count >= 3 and (time.time() - last_failure) < 300:
+        print(f"DEBUG: Skipping {backend} due to recent failures (count: {failure_count})")
+        return True
+    
+    # Reset failure count if enough time has passed
+    if (time.time() - last_failure) > 300:
+        _backend_failure_counts[backend] = 0
+    
+    return False
+
+def _record_backend_failure(backend: str):
+    """Record a backend failure for circuit breaker pattern."""
+    import time
+    _backend_failure_counts[backend] = _backend_failure_counts.get(backend, 0) + 1
+    _backend_last_failure[backend] = time.time()
+    print(f"DEBUG: Recorded failure for {backend} (total: {_backend_failure_counts[backend]})")
+
 def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str = "small") -> str:
     """Transcribe audio file using specified backend and model.
     
     This function provides transcription capabilities using various Whisper backends.
-    It includes detailed timing measurements for performance analysis.
+    It includes detailed timing measurements for performance analysis and circuit
+    breaker pattern for backend reliability.
     
     Args:
         wav_path: Path to the audio file to transcribe
@@ -1036,6 +1066,17 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
     print(f"DEBUG: Audio file path: {wav_path}")
     print(f"DEBUG: Audio file size: {audio_size / 1024:.1f} KB")
     
+    # Check circuit breaker - skip failing backends
+    if _should_skip_backend(backend):
+        print(f"DEBUG: Circuit breaker activated for {backend}, trying fallback")
+        # Use backend priority order for fallback
+        fallback_backends = ["MLXWhisper", "FasterWhisper", "StandardWhisper", "StandardOpenAIWhisperBackend"]
+        for fallback in fallback_backends:
+            if fallback != backend and not _should_skip_backend(fallback):
+                print(f"DEBUG: Using circuit breaker fallback: {fallback}")
+                backend = fallback
+                break
+    
     try:
         # Step 2: Backend initialization
         init_start = time.time()
@@ -1069,6 +1110,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
                     
             except (RuntimeError, OSError, Exception) as mlx_error:
                 print(f"DEBUG: MLX backend failed with bus error protection: {mlx_error}")
+                _record_backend_failure("MLXWhisper")  # Record failure for circuit breaker
                 # Force fallback to safer backend
                 print("DEBUG: Falling back to FasterWhisper due to MLX instability")
                 backend = "FasterWhisper"
@@ -1089,6 +1131,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
                     print(f"DEBUG: Emergency FasterWhisper fallback result: {result[:100]}...")
                 except Exception as fallback_error:
                     print(f"DEBUG: Emergency fallback also failed: {fallback_error}")
+                    _record_backend_failure("FasterWhisper")  # Record fallback failure too
                     raise RuntimeError(f"Both MLX and FasterWhisper failed: {mlx_error}, {fallback_error}")
             
             # For MLXWhisper, we can't easily separate model loading from transcription
@@ -1622,9 +1665,15 @@ class IntakeWindow(QMainWindow):
                 self.show_status(f"Resource leak detected - see console", error=True)
                 
                 # Trigger automatic cleanup if severe
-                if status['memory_increase'] > 1000 or status['thread_increase'] > 20:
-                    print(f"EMERGENCY: Severe resource leak - triggering cleanup")
+                # More conservative thresholds - only trigger on severe leaks
+                # Increased memory threshold from 1000 to 2000 MB and thread threshold from 20 to 50
+                if status['memory_increase'] > 2000 or status['thread_increase'] > 50:
+                    print(f"EMERGENCY: Severe resource leak - Memory: {status['memory_increase']}MB, Threads: {status['thread_increase']} - triggering cleanup")
                     self._force_recording_recovery()
+                elif status['memory_increase'] > 1000 or status['thread_increase'] > 25:
+                    # Warning level - try gentle cleanup first
+                    print(f"WARNING: Moderate resource increase detected - Memory: {status['memory_increase']}MB, Threads: {status['thread_increase']} - attempting gentle cleanup")
+                    self._attempt_gentle_cleanup()
                     
         except Exception as e:
             print(f"ERROR in resource check: {e}")
@@ -1641,19 +1690,27 @@ class IntakeWindow(QMainWindow):
                 current_duration = perf_counter() - self.recording_start_time
                 print(f"DEBUG: Recording duration check: {current_duration:.1f}s")
                 
-                # Only trigger emergency after 5 minutes (300 seconds)
-                if current_duration > 300:
+                # More conservative timing - warn at 5 minutes, emergency at 10 minutes
+                if current_duration > 600:  # 10 minutes - true emergency
                     print(f"EMERGENCY: Recording hung for >{current_duration:.1f}s - forcing recovery")
                     self._recording_stuck_detected = True
                     self._force_recording_recovery()
+                elif current_duration > 300:  # 5 minutes - warning
+                    print(f"WARNING: Long recording detected ({current_duration:.1f}s) - consider stopping")
+                    self.show_status(f"Recording has been active for {current_duration/60:.1f} minutes", warning=True)
             
-            # Check for stuck transcription
+            # Check for stuck transcription - more conservative timing
             if (hasattr(self, 'transcribe_start') and 
                 hasattr(self, 'current_future') and self.current_future and
-                not self.current_future.done() and
-                (time.time() - self.transcribe_start) > 600):  # 10 minutes
-                print(f"EMERGENCY: Transcription hung for >10 minutes - forcing cleanup")
-                self._force_recording_recovery()
+                not self.current_future.done()):
+                transcription_duration = time.time() - self.transcribe_start
+                
+                if transcription_duration > 1200:  # 20 minutes - true emergency
+                    print(f"EMERGENCY: Transcription hung for >{transcription_duration/60:.1f} minutes - forcing cleanup")
+                    self._force_recording_recovery()
+                elif transcription_duration > 600:  # 10 minutes - warning
+                    print(f"WARNING: Long transcription detected ({transcription_duration/60:.1f} minutes)")
+                    self.show_status(f"Transcription taking longer than expected ({transcription_duration/60:.1f}m)", warning=True)
                 
         except Exception as e:
             print(f"ERROR in emergency health check: {e}")
@@ -1814,6 +1871,44 @@ class IntakeWindow(QMainWindow):
                 import traceback
                 traceback.print_exc()
                 self._force_recording_recovery()
+    
+    def _attempt_gentle_cleanup(self) -> None:
+        """Attempt gentle cleanup of resources without forcing emergency recovery."""
+        print("INFO: Attempting gentle cleanup...")
+        
+        try:
+            # Gentle garbage collection
+            import gc
+            import sys
+            gc.collect()
+            
+            # Windows-specific extra cleanup
+            if sys.platform == "win32":
+                for _ in range(2):
+                    gc.collect()
+            
+            # Clear unused model cache entries
+            try:
+                from backend.services.dictation.model_cache import get_model_cache
+                cache = get_model_cache()
+                stats = cache.get_stats()
+                if stats['cache_size'] > 3:  # If we have more than 3 cached models
+                    print(f"INFO: Clearing excess model cache entries ({stats['cache_size']} cached)")
+                    # Don't clear all, just evict oldest entries
+                    for _ in range(stats['cache_size'] - 2):
+                        cache._evict_oldest()
+            except Exception as e:
+                print(f"DEBUG: Error in cache cleanup: {e}")
+            
+            # Clean up any closed transcription futures
+            if hasattr(self, 'current_future') and self.current_future and self.current_future.done():
+                self.current_future = None
+                print("INFO: Cleaned up completed transcription future")
+            
+            print("INFO: Gentle cleanup completed")
+            
+        except Exception as e:
+            print(f"WARNING: Error in gentle cleanup: {e}")
     
     def _force_recording_recovery(self) -> None:
         """Emergency recovery for stuck recording states."""

@@ -79,7 +79,27 @@ class MLXWhisperBackend(WhisperBackend):
         """Clean up model cache and free memory."""
         if self._model_cache is not None:
             print("DEBUG: Cleaning up MLX model cache")
+            # Explicitly delete model to free GPU memory
+            del self._model_cache
             self._model_cache = None
+            
+            # Platform-specific cleanup
             import gc
+            import sys
             gc.collect()
-            print("DEBUG: MLX model cache cleared") 
+            
+            # On Windows, force additional memory cleanup
+            if sys.platform == "win32":
+                # Force multiple GC cycles for Windows memory cleanup
+                for _ in range(3):
+                    gc.collect()
+                    
+            print("DEBUG: MLX model cache cleared")
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup."""
+        self.cleanup() 

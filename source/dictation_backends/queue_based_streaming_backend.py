@@ -102,6 +102,9 @@ class QueueBasedStreamingBackend(MLXWhisperBackend):
         self.processing_times = []
         self.gpu_cleanup_times = []
         
+        # Temporary directory tracking for cleanup
+        self._temp_dirs = set()
+        
         print(f"DEBUG: QueueBasedStreamingBackend initialized")
         print(f"  Model: {model_name}")
         print(f"  Chunk duration: {chunk_duration}s")
@@ -197,8 +200,17 @@ class QueueBasedStreamingBackend(MLXWhisperBackend):
                 self.gpu_cleanup_times.append(cleanup_time)
                 print(f"DEBUG: GPU cleanup took {cleanup_time:.2f}s")
             
-            # Clean up temporary file
+            # Clean up temporary file and directory
             temp_file.unlink(missing_ok=True)
+            try:
+                # Also remove the temp directory
+                import shutil
+                if job.temp_dir.exists():
+                    shutil.rmtree(job.temp_dir, ignore_errors=True)
+                    self._temp_dirs.discard(job.temp_dir)
+                    print(f"DEBUG: Cleaned up temp directory for chunk {job.chunk_id}")
+            except Exception as cleanup_error:
+                print(f"DEBUG: Error cleaning temp directory for chunk {job.chunk_id}: {cleanup_error}")
             
         except Exception as e:
             print(f"DEBUG: Error processing chunk {job.chunk_id}: {e}")
@@ -247,6 +259,7 @@ class QueueBasedStreamingBackend(MLXWhisperBackend):
         
         # Create temporary directory for this chunk
         temp_dir = Path(tempfile.mkdtemp())
+        self._temp_dirs.add(temp_dir)  # Track for cleanup
         
         # Create job
         job = ChunkJob(
@@ -415,6 +428,46 @@ class QueueBasedStreamingBackend(MLXWhisperBackend):
         
         return merged_text.strip()
     
+    def cleanup_temp_directories(self):
+        """Clean up any remaining temporary directories."""
+        import shutil
+        import sys
+        import gc
+        
+        try:
+            # Force cleanup of any remaining temp directories
+            temp_dirs = getattr(self, '_temp_dirs', set())
+            for temp_dir in temp_dirs:
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    print(f"DEBUG: Cleaned up temp directory: {temp_dir}")
+            
+            # Clear the set
+            self._temp_dirs = set()
+            
+            # Platform-specific memory cleanup
+            gc.collect()
+            if sys.platform == "win32":
+                # Windows-specific: Force multiple GC cycles and explicit memory cleanup
+                for _ in range(3):
+                    gc.collect()
+                    
+        except Exception as e:
+            print(f"DEBUG: Error during temp directory cleanup: {e}")
+    
     def __del__(self):
         """Cleanup when object is destroyed."""
-        self.stop_processing() 
+        try:
+            self.stop_processing()
+            self.cleanup_temp_directories()
+        except Exception as e:
+            print(f"DEBUG: Error in __del__: {e}")
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup."""
+        self.stop_processing()
+        self.cleanup_temp_directories() 
