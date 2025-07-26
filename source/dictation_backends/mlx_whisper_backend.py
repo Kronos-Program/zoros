@@ -26,7 +26,7 @@ class MLXWhisperBackend(WhisperBackend):
             print(f"DEBUG: Loading MLX model {repo} for first time")
             # Load model once and cache it
             try:
-                self._model_cache = mlx_whisper.load_model(repo)
+                self._model_cache = mlx_whisper.load_models(repo)
                 print(f"DEBUG: MLX model {repo} loaded and cached")
             except Exception as e:
                 print(f"DEBUG: MLX model loading failed, falling back to transcribe: {e}")

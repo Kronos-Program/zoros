@@ -84,7 +84,7 @@ class OptimizedMLXBackend(WhisperBackend):
                 start_time = time.time()
                 
                 # Load model with memory optimization
-                model = mlx_whisper.load_model(repo)
+                model = mlx_whisper.load_models(repo)
                 
                 load_time = time.time() - start_time
                 logger.info(f"Model {repo} loaded in {load_time:.2f}s")

@@ -429,6 +429,11 @@ class DictationLibraryWindow(QMainWindow):
     
     def apply_filters(self) -> None:
         """Apply current filters to the dictation list."""
+        # Defensive check for UI components
+        if not hasattr(self, 'search_box') or not hasattr(self, 'status_filter') or not hasattr(self, 'type_filter'):
+            logger.warning("UI components not fully initialized, skipping filter application")
+            return
+            
         status_filter = self.status_filter.currentText()
         type_filter = self.type_filter.currentText()
         search_text = self.search_box.text().lower()
@@ -467,9 +472,20 @@ class DictationLibraryWindow(QMainWindow):
     
     def populate_table(self) -> None:
         """Populate the table with filtered dictations."""
+        # Preserve current selection
+        current_selected_id = None
+        if self.current_item:
+            current_selected_id = self.current_item.id
+        
         self.table.setRowCount(len(self.filtered_dictations))
         
+        restore_selection_row = -1  # Track which row to restore selection to
+        
         for row, item in enumerate(self.filtered_dictations):
+            # Check if this is the previously selected item
+            if current_selected_id and item.id == current_selected_id:
+                restore_selection_row = row
+            
             # ID
             id_item = QTableWidgetItem(item.id[:8] + "...")  # Truncate long IDs
             id_item.setData(Qt.UserRole, item.id)
@@ -503,8 +519,11 @@ class DictationLibraryWindow(QMainWindow):
             audio_item = QTableWidgetItem(audio_icon)
             self.table.setItem(row, 6, audio_item)
         
-        # Select first row if available
-        if self.filtered_dictations and self.table.rowCount() > 0:
+        # Restore selection or select first row if none was selected
+        if restore_selection_row >= 0:
+            self.table.selectRow(restore_selection_row)
+        elif self.filtered_dictations and self.table.rowCount() > 0 and not current_selected_id:
+            # Only auto-select first row if there was no previous selection
             self.table.selectRow(0)
     
     def on_selection_changed(self) -> None:
@@ -901,12 +920,19 @@ class DictationLibraryWindow(QMainWindow):
         if not audio_path:
             return 0.0
         
+        # Check if file exists before trying to read it
+        from pathlib import Path
+        audio_file = Path(audio_path)
+        if not audio_file.exists():
+            logger.debug(f"Audio file not found: {audio_path}")
+            return 0.0
+        
         try:
             import soundfile as sf
             info = sf.info(audio_path)
             return info.duration
         except Exception as e:
-            logger.error(f"Error getting audio duration: {e}")
+            logger.debug(f"Error getting audio duration for {audio_path}: {e}")
             return 0.0
     
     def send_to_test_assets(self) -> None:

@@ -69,7 +69,7 @@ class UltraFastMLXBackend(MLXWhisperBackend):
             with self._cache_lock:
                 if repo not in self._model_cache:
                     # Load model with maximum optimization
-                    model = mlx_whisper.load_model(repo)
+                    model = mlx_whisper.load_models(repo)
                     self._model_cache[repo] = model
                     
                     load_time = time.time() - start_time

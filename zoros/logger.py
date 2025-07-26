@@ -73,7 +73,7 @@ class SQLiteHandler(logging.Handler):
             conn.commit()
         if record.levelno >= logging.WARNING:
             repeat = _increment_error(record)
-            from source.core.models.log_fiber import LogFiber
+            from backend.core.models.log_fiber import LogFiber
 
             fiber = LogFiber.create_from_log(record, repeat=repeat)
             fiber.save()

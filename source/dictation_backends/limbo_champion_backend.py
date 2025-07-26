@@ -88,7 +88,7 @@ class LimboChampionBackend(MLXWhisperBackend):
             start_time = time.time()
             with cls._cache_lock:
                 if repo not in cls._global_model_cache:
-                    model = mlx_whisper.load_model(repo)
+                    model = mlx_whisper.load_models(repo)
                     cls._global_model_cache[repo] = model
                     
                     warmup_time = time.time() - start_time
