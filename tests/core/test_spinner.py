@@ -10,8 +10,8 @@ import pytest
 
 pytest.importorskip("pydantic")
 
-from source.core.models.fiber import Fiber
-from source.orchestration.spinner import Spinner
+from backend.core.models.fiber import Fiber
+from backend.orchestration.spinner import Spinner
 
 
 class SpinnerTest(unittest.TestCase):

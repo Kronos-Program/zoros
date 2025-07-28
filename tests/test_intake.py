@@ -13,7 +13,9 @@ pytest.importorskip("PySide6.QtWidgets")
 # Fake audio deps so import does not require native libs
 sys.modules.setdefault("sounddevice", types.ModuleType("sounddevice"))
 sys.modules.setdefault("soundfile", types.ModuleType("soundfile"))
-sys.modules.setdefault("numpy", types.ModuleType("numpy"))
+numpy_mock = types.ModuleType("numpy")
+numpy_mock.ndarray = type('ndarray', (), {})
+sys.modules.setdefault("numpy", numpy_mock)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("pydantic")
 
-from source.core.models.fiber import Fiber, TransformOptions
+from backend.core.models.fiber import Fiber, TransformOptions
 
 
 class FiberTest(unittest.TestCase):

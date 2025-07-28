@@ -6,9 +6,9 @@ import pytest
 
 pytest.importorskip("pydantic")
 
-from source.core.models import thread as thread_mod
-from source.core.models.fiber import Fiber
-from source.core.models.thread import Thread
+from backend.core.models import thread as thread_mod
+from backend.core.models.fiber import Fiber
+from backend.core.models.thread import Thread
 
 
 class ThreadTest(unittest.TestCase):

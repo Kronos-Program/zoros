@@ -8,9 +8,9 @@ import pytest
 
 pytest.importorskip("pydantic")
 
-from source.core.models.fiber import Fiber
-from source.core.models.fibrizer_options import FibrizerOptions
-from source.orchestration.fibrizers.base_fibrizer import BaseFibrizer
+from backend.core.models.fiber import Fiber
+from backend.core.models.fibrizer_options import FibrizerOptions
+from backend.orchestration.fibrizers.base_fibrizer import BaseFibrizer
 
 
 class DummyFibrizer(BaseFibrizer):

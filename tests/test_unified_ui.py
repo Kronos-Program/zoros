@@ -14,14 +14,16 @@ pytest.importorskip("PySide6.QtWebEngineWidgets", reason="PySide6 not available"
 # Provide stub modules for optional audio deps so import succeeds
 sys.modules.setdefault("sounddevice", types.ModuleType("sounddevice"))
 sys.modules.setdefault("soundfile", types.ModuleType("soundfile"))
-sys.modules.setdefault("numpy", types.ModuleType("numpy"))
+numpy_mock = types.ModuleType("numpy")
+numpy_mock.ndarray = type('ndarray', (), {})
+sys.modules.setdefault("numpy", numpy_mock)
 pytest.importorskip("PySide6.QtWidgets", reason="PySide6 not available")
 
-from source.interfaces.intake.main import IntakeWindow
+from backend.interfaces.intake.main import IntakeWindow
 
 class TestUnifiedUI(unittest.TestCase):
     @patch('PySide6.QtWebEngineWidgets.QWebEngineView')
-    @patch('source.interfaces.intake.main.requests.get')
+    @patch('backend.interfaces.intake.main.requests.get')
     def test_unified_ui_initializes(self, mock_get, mock_view):
         mock_get.return_value.status_code = 200
         window = IntakeWindow(unified=True)

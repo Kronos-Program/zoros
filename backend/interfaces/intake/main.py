@@ -62,16 +62,6 @@ from backend.services.dictation import (
     is_backend_available,
     check_backend,
 )
-from backend.services.hotkey_service import get_hotkey_service
-
-# Improved threading services
-try:
-    from backend.services.intake_transcription_adapter import create_intake_adapter
-    from backend.services.enhanced_resource_monitor import get_resource_monitor
-    IMPROVED_THREADING_AVAILABLE = True
-except ImportError:
-    IMPROVED_THREADING_AVAILABLE = False
-    
 # Optional imports for specialized backends - these will be loaded via registry
 try:
     from backend.services.dictation.live_chunk_processor import LiveChunkProcessor
@@ -85,7 +75,7 @@ try:
 except ImportError:
     STABILITY_AVAILABLE = False
 try:  # optional PySide6 imports
-    from PySide6.QtCore import Qt, QTimer, Signal, QMutex, QMutexLocker
+    from PySide6.QtCore import Qt, QTimer, Signal
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import (
         QApplication,
@@ -628,19 +618,18 @@ class SettingsDialog(QDialog):
         self.toggle_btn.clicked.connect(self._toggle_persistent)
         layout.addRow(self.persistent_cb, self.toggle_btn)
 
-        # Audio device selection with refresh capability
-        device_layout = QHBoxLayout()
         self.device_box = QComboBox()
-        self._populate_audio_devices(settings)
-        device_layout.addWidget(self.device_box)
-        
-        refresh_devices_btn = QPushButton("🔄")
-        refresh_devices_btn.setToolTip("Refresh audio device list")
-        refresh_devices_btn.setMaximumWidth(30)
-        refresh_devices_btn.clicked.connect(self._refresh_audio_devices)
-        device_layout.addWidget(refresh_devices_btn)
-        
-        layout.addRow("Audio Device", device_layout)
+        self.device_box.addItem("Default", None)
+        devices = sd.query_devices()
+        for idx, dev in enumerate(devices):
+            if isinstance(dev, dict) and dev.get("max_input_channels", 0) > 0:
+                self.device_box.addItem(dev["name"], idx)
+        sel = settings.get("SelectedAudioDevice")
+        if sel is not None:
+            pos = self.device_box.findData(sel)
+            if pos >= 0:
+                self.device_box.setCurrentIndex(pos)
+        layout.addRow("Audio Device", self.device_box)
 
         # Foldable backend section
         self.backend_section_toggle = QPushButton("▼ Backend Configuration")
@@ -708,14 +697,6 @@ class SettingsDialog(QDialog):
         layout.addRow(self.expose_cb)
 
         btn_layout = QHBoxLayout()
-        
-        # Add hotkey settings button
-        hotkey_settings_btn = QPushButton("🎹 Hotkey Settings")
-        hotkey_settings_btn.clicked.connect(self._open_hotkey_settings)
-        btn_layout.addWidget(hotkey_settings_btn)
-        
-        btn_layout.addStretch()  # Add space between hotkey button and other buttons
-        
         save = QPushButton("Save")
         cancel = QPushButton("Cancel")
         test = QPushButton("Test")
@@ -734,7 +715,7 @@ class SettingsDialog(QDialog):
         )
 
     def _run_test(self) -> None:
-        from source.dictation_backends import check_backend
+        from backend.services.dictation import check_backend
 
         backend = self.backend_box.currentText()
         device = self.device_box.currentData()
@@ -844,68 +825,6 @@ class SettingsDialog(QDialog):
             # Repopulate and select the moved item
             self._populate_backend_box()
             self.backend_box.setCurrentIndex(current_index + 1)
-
-    def _populate_audio_devices(self, settings: dict):
-        """Populate the audio device combo box."""
-        self.device_box.clear()
-        self.device_box.addItem("Default", None)
-        
-        try:
-            devices = sd.query_devices()
-            for idx, dev in enumerate(devices):
-                if isinstance(dev, dict) and dev.get("max_input_channels", 0) > 0:
-                    self.device_box.addItem(dev["name"], idx)
-        except Exception as e:
-            logger.error(f"Error querying audio devices: {e}")
-            # Add a fallback option
-            self.device_box.addItem("Error - No devices detected", None)
-        
-        # Restore previous selection
-        sel = settings.get("SelectedAudioDevice")
-        if sel is not None:
-            pos = self.device_box.findData(sel)
-            if pos >= 0:
-                self.device_box.setCurrentIndex(pos)
-    
-    def _refresh_audio_devices(self):
-        """Refresh the audio device list."""
-        current_selection = self.device_box.currentData()
-        current_settings = {"SelectedAudioDevice": current_selection}
-        
-        # Store current selection text for feedback
-        old_count = self.device_box.count()
-        
-        # Repopulate devices
-        self._populate_audio_devices(current_settings)
-        
-        new_count = self.device_box.count()
-        
-        # Show feedback to user
-        if new_count > old_count:
-            QMessageBox.information(
-                self, "Devices Refreshed", 
-                f"Found {new_count - old_count} new audio device(s)!"
-            )
-        elif new_count < old_count:
-            QMessageBox.information(
-                self, "Devices Refreshed",
-                f"Removed {old_count - new_count} unavailable device(s)."
-            )
-        else:
-            QMessageBox.information(
-                self, "Devices Refreshed",
-                "Audio device list refreshed. No changes detected."
-            )
-
-    def _open_hotkey_settings(self):
-        """Open the hotkey settings dialog."""
-        try:
-            from .hotkey_settings import HotkeySettingsDialog
-            dialog = HotkeySettingsDialog(self)
-            dialog.exec()
-        except Exception as e:
-            logger.error(f"Error opening hotkey settings: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to open hotkey settings: {e}")
 
     def get_values(self) -> dict:
         return {
@@ -1071,11 +990,41 @@ def test_audio_device(device: Optional[int] = None) -> bool:
         return False
 
 
+# Backend health tracking for circuit breaker pattern
+_backend_failure_counts = {}
+_backend_last_failure = {}
+
+def _should_skip_backend(backend: str) -> bool:
+    """Check if backend should be skipped due to recent failures."""
+    import time
+    
+    failure_count = _backend_failure_counts.get(backend, 0)
+    last_failure = _backend_last_failure.get(backend, 0)
+    
+    # Skip if more than 3 failures in last 5 minutes
+    if failure_count >= 3 and (time.time() - last_failure) < 300:
+        print(f"DEBUG: Skipping {backend} due to recent failures (count: {failure_count})")
+        return True
+    
+    # Reset failure count if enough time has passed
+    if (time.time() - last_failure) > 300:
+        _backend_failure_counts[backend] = 0
+    
+    return False
+
+def _record_backend_failure(backend: str):
+    """Record a backend failure for circuit breaker pattern."""
+    import time
+    _backend_failure_counts[backend] = _backend_failure_counts.get(backend, 0) + 1
+    _backend_last_failure[backend] = time.time()
+    print(f"DEBUG: Recorded failure for {backend} (total: {_backend_failure_counts[backend]})")
+
 def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str = "small") -> str:
     """Transcribe audio file using specified backend and model.
     
     This function provides transcription capabilities using various Whisper backends.
-    It includes detailed timing measurements for performance analysis.
+    It includes detailed timing measurements for performance analysis and circuit
+    breaker pattern for backend reliability.
     
     Args:
         wav_path: Path to the audio file to transcribe
@@ -1117,6 +1066,17 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
     print(f"DEBUG: Audio file path: {wav_path}")
     print(f"DEBUG: Audio file size: {audio_size / 1024:.1f} KB")
     
+    # Check circuit breaker - skip failing backends
+    if _should_skip_backend(backend):
+        print(f"DEBUG: Circuit breaker activated for {backend}, trying fallback")
+        # Use backend priority order for fallback
+        fallback_backends = ["MLXWhisper", "FasterWhisper", "StandardWhisper", "StandardOpenAIWhisperBackend"]
+        for fallback in fallback_backends:
+            if fallback != backend and not _should_skip_backend(fallback):
+                print(f"DEBUG: Using circuit breaker fallback: {fallback}")
+                backend = fallback
+                break
+    
     try:
         # Step 2: Backend initialization
         init_start = time.time()
@@ -1150,6 +1110,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
                     
             except (RuntimeError, OSError, Exception) as mlx_error:
                 print(f"DEBUG: MLX backend failed with bus error protection: {mlx_error}")
+                _record_backend_failure("MLXWhisper")  # Record failure for circuit breaker
                 # Force fallback to safer backend
                 print("DEBUG: Falling back to FasterWhisper due to MLX instability")
                 backend = "FasterWhisper"
@@ -1170,6 +1131,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
                     print(f"DEBUG: Emergency FasterWhisper fallback result: {result[:100]}...")
                 except Exception as fallback_error:
                     print(f"DEBUG: Emergency fallback also failed: {fallback_error}")
+                    _record_backend_failure("FasterWhisper")  # Record fallback failure too
                     raise RuntimeError(f"Both MLX and FasterWhisper failed: {mlx_error}, {fallback_error}")
             
             # For MLXWhisper, we can't easily separate model loading from transcription
@@ -1198,7 +1160,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
                 original_handler = signal.signal(signal.SIGBUS, bus_error_handler)
                 
                 try:
-                    from source.dictation_backends.parallel_mlx_whisper_backend import ParallelMLXWhisperBackend
+                    from backend.services.dictation.parallel_mlx_whisper_backend import ParallelMLXWhisperBackend
                     backend_instance = ParallelMLXWhisperBackend(model)
                     timing_data['backend_initialization'] = time.time() - init_start
                     
@@ -1231,7 +1193,7 @@ def transcribe_audio(wav_path: str, backend: str = "StandardWhisper", model: str
             
         elif backend == "QueueBasedStreamingMLXWhisper":
             print("DEBUG: Trying QueueBasedStreamingMLXWhisper backend...")
-            from source.dictation_backends.queue_based_streaming_backend import QueueBasedStreamingBackend
+            from backend.services.dictation.queue_based_streaming_backend import QueueBasedStreamingBackend
             backend_instance = QueueBasedStreamingBackend(model)
             timing_data['backend_initialization'] = time.time() - init_start
             
@@ -1446,40 +1408,10 @@ class IntakeWindow(QMainWindow):
             self._init_unified_ui()
             return
         self.recorder = Recorder()
-        
-        # Initialize improved threading services
-        self.using_improved_threading = False
-        if IMPROVED_THREADING_AVAILABLE:
-            try:
-                # New signal-based transcription adapter (replaces ThreadPoolExecutor)
-                self.transcription_adapter = create_intake_adapter(timeout_seconds=60)
-                # Enhanced resource monitor (replaces basic ResourceMonitor)
-                self.enhanced_resource_monitor = get_resource_monitor()
-                # Thread synchronization
-                self._state_mutex = QMutex()
-                self._transcribing_state = False
-                self.using_improved_threading = True
-                logger.info("✅ Improved threading services initialized")
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize improved threading services: {e}")
-                # Fallback to legacy system
-                self.using_improved_threading = False
-                self.executor = ThreadPoolExecutor(max_workers=1)
-                self._resource_monitor = ResourceMonitor()
-                self._start_resource_monitoring()
-                logger.warning("⚠️ Falling back to legacy threading due to initialization error")
-        else:
-            # Fallback to legacy system
-            self.executor = ThreadPoolExecutor(max_workers=1)
-            if hasattr(self, '_start_resource_monitoring'):
-                self._resource_monitor = ResourceMonitor()
-                self._start_resource_monitoring()
-            logger.warning("⚠️ Using legacy threading - improved services not available")
-        
-        # Common state variables
+        self.executor = ThreadPoolExecutor(max_workers=1)
         self.audio_path: Optional[Path] = None
         self.backend_instance: Optional[object] = None
-        self.current_future: Optional[object] = None  # Keep for legacy compatibility
+        self.current_future: Optional[object] = None
         
         # Live transcription components
         self.live_backend = None
@@ -1491,11 +1423,15 @@ class IntakeWindow(QMainWindow):
         self.current_backend = None
         self.current_model = None
         
-        # Emergency robustness components (keep for compatibility)
+        # Emergency robustness components
         self._recording_lock = threading.RLock()
         self._recording_stuck_detected = False
+        self._resource_monitor = ResourceMonitor()
         self._semaphore_tracker = SemaphoreTracker()
         self._initial_thread_count = threading.active_count()
+        
+        # Start resource monitoring
+        self._start_resource_monitoring()
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -1666,19 +1602,6 @@ class IntakeWindow(QMainWindow):
         self.finish_transcription_signal.connect(self._finish_transcription)
         self.live_transcript_update_signal.connect(self._handle_live_transcript_update)
         
-        # Connect improved threading signals
-        if self.using_improved_threading and hasattr(self, 'transcription_adapter'):
-            try:
-                self._connect_improved_transcription_signals()
-                self._connect_enhanced_resource_signals()
-                # Start enhanced resource monitoring
-                if hasattr(self, 'enhanced_resource_monitor'):
-                    self.enhanced_resource_monitor.start_monitoring()
-                logger.info("✅ Connected improved threading signals")
-            except Exception as e:
-                logger.error(f"❌ Failed to connect improved threading signals: {e}")
-                logger.warning("⚠️ Improved threading may not work correctly")
-        
         # Register with window manager
         try:
             from ..window_manager import register_window
@@ -1703,63 +1626,12 @@ class IntakeWindow(QMainWindow):
 
         self.apply_settings()
         
-        # Initialize global hotkey service
-        self._setup_hotkey_service()
-        
         # Initialize navigation with existing records
         self.refresh_records()
         
         # Auto-preload model for maximum speed
         self._auto_preload_model()
-        
-        # Setup device monitoring - check for new devices every 30 seconds
-        self._setup_device_monitoring()
     
-    def _setup_device_monitoring(self) -> None:
-        """Setup periodic monitoring for new audio devices."""
-        self._device_monitoring_timer = QTimer(self)
-        self._device_monitoring_timer.setInterval(30000)  # Check every 30 seconds
-        self._device_monitoring_timer.timeout.connect(self._check_for_new_devices)
-        self._device_monitoring_timer.start()
-        
-        # Keep track of known devices
-        self._known_devices = set()
-        try:
-            devices = sd.query_devices()
-            for idx, dev in enumerate(devices):
-                if isinstance(dev, dict) and dev.get("max_input_channels", 0) > 0:
-                    self._known_devices.add(dev["name"])
-        except Exception as e:
-            logger.debug(f"Error initializing device list: {e}")
-        
-        logger.info(f"Device monitoring started - tracking {len(self._known_devices)} input devices")
-    
-    def _check_for_new_devices(self) -> None:
-        """Check for newly connected audio devices."""
-        try:
-            current_devices = set()
-            devices = sd.query_devices()
-            for idx, dev in enumerate(devices):
-                if isinstance(dev, dict) and dev.get("max_input_channels", 0) > 0:
-                    current_devices.add(dev["name"])
-            
-            # Check for new devices
-            new_devices = current_devices - self._known_devices
-            if new_devices:
-                logger.info(f"New audio devices detected: {', '.join(new_devices)}")
-                self._known_devices = current_devices
-                # Optionally show a subtle notification
-                self.show_status(f"New audio device detected: {list(new_devices)[0]}")
-            
-            # Check for removed devices
-            removed_devices = self._known_devices - current_devices
-            if removed_devices:
-                logger.info(f"Audio devices removed: {', '.join(removed_devices)}")
-                self._known_devices = current_devices
-                
-        except Exception as e:
-            logger.debug(f"Error checking for new devices: {e}")
-
     def _start_resource_monitoring(self) -> None:
         """Start continuous resource monitoring for leak detection."""
         print(f"MONITOR: Starting resource monitoring")
@@ -1793,9 +1665,15 @@ class IntakeWindow(QMainWindow):
                 self.show_status(f"Resource leak detected - see console", error=True)
                 
                 # Trigger automatic cleanup if severe
-                if status['memory_increase'] > 1000 or status['thread_increase'] > 20:
-                    print(f"EMERGENCY: Severe resource leak - triggering cleanup")
+                # More conservative thresholds - only trigger on severe leaks
+                # Increased memory threshold from 1000 to 2000 MB and thread threshold from 20 to 50
+                if status['memory_increase'] > 2000 or status['thread_increase'] > 50:
+                    print(f"EMERGENCY: Severe resource leak - Memory: {status['memory_increase']}MB, Threads: {status['thread_increase']} - triggering cleanup")
                     self._force_recording_recovery()
+                elif status['memory_increase'] > 1000 or status['thread_increase'] > 25:
+                    # Warning level - try gentle cleanup first
+                    print(f"WARNING: Moderate resource increase detected - Memory: {status['memory_increase']}MB, Threads: {status['thread_increase']} - attempting gentle cleanup")
+                    self._attempt_gentle_cleanup()
                     
         except Exception as e:
             print(f"ERROR in resource check: {e}")
@@ -1812,19 +1690,27 @@ class IntakeWindow(QMainWindow):
                 current_duration = perf_counter() - self.recording_start_time
                 print(f"DEBUG: Recording duration check: {current_duration:.1f}s")
                 
-                # Only trigger emergency after 5 minutes (300 seconds)
-                if current_duration > 300:
+                # More conservative timing - warn at 5 minutes, emergency at 10 minutes
+                if current_duration > 600:  # 10 minutes - true emergency
                     print(f"EMERGENCY: Recording hung for >{current_duration:.1f}s - forcing recovery")
                     self._recording_stuck_detected = True
                     self._force_recording_recovery()
+                elif current_duration > 300:  # 5 minutes - warning
+                    print(f"WARNING: Long recording detected ({current_duration:.1f}s) - consider stopping")
+                    self.show_status(f"Recording has been active for {current_duration/60:.1f} minutes", warning=True)
             
-            # Check for stuck transcription
+            # Check for stuck transcription - more conservative timing
             if (hasattr(self, 'transcribe_start') and 
                 hasattr(self, 'current_future') and self.current_future and
-                not self.current_future.done() and
-                (time.time() - self.transcribe_start) > 600):  # 10 minutes
-                print(f"EMERGENCY: Transcription hung for >10 minutes - forcing cleanup")
-                self._force_recording_recovery()
+                not self.current_future.done()):
+                transcription_duration = time.time() - self.transcribe_start
+                
+                if transcription_duration > 1200:  # 20 minutes - true emergency
+                    print(f"EMERGENCY: Transcription hung for >{transcription_duration/60:.1f} minutes - forcing cleanup")
+                    self._force_recording_recovery()
+                elif transcription_duration > 600:  # 10 minutes - warning
+                    print(f"WARNING: Long transcription detected ({transcription_duration/60:.1f} minutes)")
+                    self.show_status(f"Transcription taking longer than expected ({transcription_duration/60:.1f}m)", warning=True)
                 
         except Exception as e:
             print(f"ERROR in emergency health check: {e}")
@@ -1986,6 +1872,44 @@ class IntakeWindow(QMainWindow):
                 traceback.print_exc()
                 self._force_recording_recovery()
     
+    def _attempt_gentle_cleanup(self) -> None:
+        """Attempt gentle cleanup of resources without forcing emergency recovery."""
+        print("INFO: Attempting gentle cleanup...")
+        
+        try:
+            # Gentle garbage collection
+            import gc
+            import sys
+            gc.collect()
+            
+            # Windows-specific extra cleanup
+            if sys.platform == "win32":
+                for _ in range(2):
+                    gc.collect()
+            
+            # Clear unused model cache entries
+            try:
+                from backend.services.dictation.model_cache import get_model_cache
+                cache = get_model_cache()
+                stats = cache.get_stats()
+                if stats['cache_size'] > 3:  # If we have more than 3 cached models
+                    print(f"INFO: Clearing excess model cache entries ({stats['cache_size']} cached)")
+                    # Don't clear all, just evict oldest entries
+                    for _ in range(stats['cache_size'] - 2):
+                        cache._evict_oldest()
+            except Exception as e:
+                print(f"DEBUG: Error in cache cleanup: {e}")
+            
+            # Clean up any closed transcription futures
+            if hasattr(self, 'current_future') and self.current_future and self.current_future.done():
+                self.current_future = None
+                print("INFO: Cleaned up completed transcription future")
+            
+            print("INFO: Gentle cleanup completed")
+            
+        except Exception as e:
+            print(f"WARNING: Error in gentle cleanup: {e}")
+    
     def _force_recording_recovery(self) -> None:
         """Emergency recovery for stuck recording states."""
         print(f"EMERGENCY: Forcing recording recovery...")
@@ -2057,10 +1981,6 @@ class IntakeWindow(QMainWindow):
             
             self.start_record()
             
-            # Update hotkey service state
-            if hasattr(self, 'hotkey_service') and self.hotkey_service:
-                self.hotkey_service.set_recording_state(True)
-            
         except Exception as e:
             print(f"ERROR in _safe_start_record: {e}")
             import traceback
@@ -2078,10 +1998,6 @@ class IntakeWindow(QMainWindow):
             
             self.stop_record()
             
-            # Update hotkey service state
-            if hasattr(self, 'hotkey_service') and self.hotkey_service:
-                self.hotkey_service.set_recording_state(False)
-            
             # Cancel watchdog if stop completed normally
             if hasattr(self, '_stop_watchdog_timer'):
                 self._stop_watchdog_timer.stop()
@@ -2091,10 +2007,6 @@ class IntakeWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             self._handle_recording_error(f"Failed to stop recording: {e}")
-            
-            # Ensure hotkey state is reset on error
-            if hasattr(self, 'hotkey_service') and self.hotkey_service:
-                self.hotkey_service.set_recording_state(False)
     
     def _handle_stop_timeout(self) -> None:
         """Handle timeout during stop operation."""
@@ -2481,21 +2393,6 @@ class IntakeWindow(QMainWindow):
                 self.pipeline_start_time = self.transcribe_start  # Mark pipeline start
                 print(f"DEBUG: Pipeline start time: {self.pipeline_start_time}")
                 
-                # Store recording duration for improved transcription service
-                self.recording_duration = recording_duration
-                
-                # Try improved transcription system first
-                if self.using_improved_threading and hasattr(self, 'transcription_adapter'):
-                    logger.info("🚀 Using improved transcription system")
-                    success = self._submit_improved_transcription(self.audio_path)
-                    if success:
-                        print(f"DEBUG: Improved transcription submitted successfully")
-                        return  # Exit early - signals will handle the rest
-                    else:
-                        logger.warning("⚠️ Improved transcription failed, falling back to legacy")
-                
-                # Legacy transcription system (fallback)
-                logger.info("📝 Using legacy transcription system")
                 if self.backend_instance is not None:
                     def _run(path: str) -> str:
                         print(f"DEBUG: Starting transcription in thread with backend instance")
@@ -3388,274 +3285,9 @@ class IntakeWindow(QMainWindow):
         
         print(f"DEBUG: Clearing audio_path...")
         self.audio_path = None
-        
-        # Reset UI state - this was missing and causing the button to stay on "Transcribing..."
-        print(f"DEBUG: Resetting UI state...")
-        self.record_btn.setText("🔴 Record")
-        self.record_btn.setStyleSheet("")
-        self.record_btn.setEnabled(True)
-        print(f"DEBUG: Record button reset to Record state")
-        
         print(f"DEBUG: _finish_transcription completed")
 
 
-
-    def _connect_improved_transcription_signals(self) -> None:
-        """Connect signals from the improved transcription adapter."""
-        if not hasattr(self, 'transcription_adapter'):
-            return
-        
-        # Primary transcription signals
-        self.transcription_adapter.transcription_started.connect(self._on_improved_transcription_started)
-        self.transcription_adapter.transcription_completed.connect(self._on_improved_transcription_completed)
-        self.transcription_adapter.transcription_failed.connect(self._on_improved_transcription_failed)
-        self.transcription_adapter.transcription_progress.connect(self._on_improved_transcription_progress)
-        self.transcription_adapter.transcription_timeout.connect(self._on_improved_transcription_timeout)
-        
-        # Resource monitoring signals
-        self.transcription_adapter.resource_warning.connect(self._on_improved_resource_warning)
-        self.transcription_adapter.service_stats_updated.connect(self._on_improved_service_stats)
-        
-        logger.info("✅ Connected improved transcription signals")
-    
-    def _connect_enhanced_resource_signals(self) -> None:
-        """Connect signals from the enhanced resource monitor."""
-        if not hasattr(self, 'enhanced_resource_monitor'):
-            return
-        
-        # Resource monitoring signals
-        self.enhanced_resource_monitor.resource_warning.connect(self._on_enhanced_resource_warning)
-        self.enhanced_resource_monitor.resource_critical.connect(self._on_enhanced_resource_critical)
-        self.enhanced_resource_monitor.cleanup_triggered.connect(self._on_enhanced_cleanup_triggered)
-        self.enhanced_resource_monitor.resource_recovered.connect(self._on_enhanced_resource_recovered)
-        
-        logger.info("✅ Connected enhanced resource monitor signals")
-    
-    # Improved transcription signal handlers
-    
-    def _on_improved_transcription_started(self) -> None:
-        """Handle improved transcription started signal."""
-        with QMutexLocker(self._state_mutex):
-            self._transcribing_state = True
-        
-        logger.info("🔄 Improved transcription started")
-        # Update UI to show transcription in progress
-        if hasattr(self, 'record_btn'):
-            self.record_btn.setText("🔄 Transcribing...")
-            self.record_btn.setEnabled(False)
-    
-    def _on_improved_transcription_completed(self, result: str) -> None:
-        """Handle improved transcription completed signal."""
-        with QMutexLocker(self._state_mutex):
-            self._transcribing_state = False
-        
-        logger.info(f"✅ Improved transcription completed: {result[:100]}...")
-        
-        # Use the existing _finish_transcription method for consistency
-        self._finish_transcription(result)
-        
-        # Additional safety check to ensure UI is reset (in case _finish_transcription doesn't work)
-        if hasattr(self, 'record_btn'):
-            self.record_btn.setText("🔴 Record")
-            self.record_btn.setEnabled(True)
-            logger.debug("🔄 UI state reset confirmed in improved transcription completion")
-    
-    def _on_improved_transcription_failed(self, error: str) -> None:
-        """Handle improved transcription failed signal."""
-        with QMutexLocker(self._state_mutex):
-            self._transcribing_state = False
-        
-        logger.error(f"❌ Improved transcription failed: {error}")
-        
-        # Show error in UI and reset state
-        if hasattr(self, 'transcript_display'):
-            self.transcript_display.setPlainText(f"Transcription failed: {error}")
-        if hasattr(self, 'record_btn'):
-            self.record_btn.setText("🔴 Record")
-            self.record_btn.setEnabled(True)
-        
-        # Show error message briefly
-        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
-            self.status.showMessage(f"Transcription failed: {error}", 5000)
-    
-    def _on_improved_transcription_progress(self, progress: float) -> None:
-        """Handle improved transcription progress update."""
-        progress_percent = int(progress * 100)
-        logger.debug(f"📊 Transcription progress: {progress_percent}%")
-        
-        # Update status bar if available
-        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
-            self.status.showMessage(f"Transcribing... {progress_percent}%", 1000)
-    
-    def _on_improved_transcription_timeout(self) -> None:
-        """Handle improved transcription timeout."""
-        with QMutexLocker(self._state_mutex):
-            self._transcribing_state = False
-        
-        logger.warning("⏱️ Improved transcription timed out")
-        
-        # Show timeout message and reset UI
-        if hasattr(self, 'transcript_display'):
-            self.transcript_display.setPlainText("Transcription timed out. Please try again.")
-        if hasattr(self, 'record_btn'):
-            self.record_btn.setText("🔴 Record")
-            self.record_btn.setEnabled(True)
-        
-        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
-            self.status.showMessage("Transcription timed out", 5000)
-    
-    def _on_improved_resource_warning(self, resource_type: str, message: str) -> None:
-        """Handle resource warning from transcription adapter."""
-        logger.warning(f"⚠️ Resource warning: {resource_type} - {message}")
-        
-        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
-            self.status.showMessage(f"Resource warning: {resource_type}", 3000)
-    
-    def _on_improved_service_stats(self, stats: dict) -> None:
-        """Handle service statistics update."""
-        logger.debug(f"📊 Service stats: {stats}")
-        # Could update a status display or log performance metrics
-    
-    # Enhanced resource monitor signal handlers
-    
-    def _on_enhanced_resource_warning(self, resource_type: str, message: str) -> None:
-        """Handle enhanced resource monitor warning."""
-        logger.warning(f"⚠️ Enhanced resource warning: {resource_type} - {message}")
-    
-    def _on_enhanced_resource_critical(self, resource_type: str, message: str) -> None:
-        """Handle critical resource issue from enhanced monitor."""
-        logger.error(f"🚨 CRITICAL resource issue: {resource_type} - {message}")
-        
-        # For critical memory issues, cancel current transcription
-        if "memory" in resource_type and self._transcribing_state:
-            logger.warning("🛑 Cancelling transcription due to critical memory issue")
-            if hasattr(self, 'transcription_adapter'):
-                self.transcription_adapter.cancel_current_transcription()
-        
-        # Show critical alert
-        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
-            self.status.showMessage(f"CRITICAL: {resource_type} issue", 10000)
-    
-    def _on_enhanced_cleanup_triggered(self, cleanup_type: str) -> None:
-        """Handle cleanup triggered event."""
-        logger.info(f"🧹 Enhanced cleanup triggered: {cleanup_type}")
-    
-    def _on_enhanced_resource_recovered(self, resource_type: str) -> None:
-        """Handle resource recovery."""
-        logger.info(f"✅ Resource recovered: {resource_type}")
-    
-    def _submit_improved_transcription(self, audio_path: Path) -> bool:
-        """Submit transcription using the improved threading system."""
-        if not self.using_improved_threading or not hasattr(self, 'transcription_adapter'):
-            logger.warning("Improved threading not available, falling back to legacy")
-            return False
-        
-        try:
-            # Get backend and model settings
-            backend = getattr(self, 'whisper_backend', 'MLXWhisper')
-            model = getattr(self, 'whisper_model', 'large-v3-turbo')
-            
-            logger.info(f"🚀 Submitting improved transcription: {audio_path} -> {backend}/{model}")
-            
-            # Submit transcription to improved service
-            success = self.transcription_adapter.submit_transcription(
-                audio_path=audio_path,
-                backend=backend,
-                model=model,
-                metadata={
-                    'source': 'intake_ui',
-                    'timestamp': time.time(),
-                    'recording_duration': getattr(self, 'recording_duration', 0)
-                }
-            )
-            
-            if success:
-                logger.info("✅ Improved transcription submitted successfully")
-                return True
-            else:
-                logger.error("❌ Failed to submit improved transcription")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error submitting improved transcription: {e}")
-            return False
-
-    def _setup_hotkey_service(self) -> None:
-        """Initialize and configure the global hotkey service."""
-        try:
-            # Only initialize if not in unified mode to avoid conflicts
-            if getattr(self, 'unified', False):
-                logger.info("Skipping hotkey setup in unified mode")
-                return
-                
-            self.hotkey_service = get_hotkey_service()
-            
-            # Set callbacks for recording control
-            self.hotkey_service.set_callbacks(
-                start_callback=self._hotkey_start_recording,
-                stop_callback=self._hotkey_stop_recording
-            )
-            
-            # Connect Qt signals
-            self.hotkey_service.start_recording.connect(self._hotkey_start_recording)
-            self.hotkey_service.stop_recording.connect(self._hotkey_stop_recording)
-            self.hotkey_service.hotkey_error.connect(self._hotkey_error)
-            
-            # Start hotkey monitoring with safer approach
-            try:
-                if self.hotkey_service.start_hotkeys():
-                    logger.info("Global hotkeys initialized successfully")
-                else:
-                    logger.warning("Failed to initialize global hotkeys - continuing without them")
-            except Exception as hotkey_error:
-                logger.warning(f"Hotkey initialization failed: {hotkey_error} - continuing without hotkeys")
-                
-        except Exception as e:
-            logger.warning(f"Error setting up hotkey service: {e} - continuing without hotkeys")
-            self.hotkey_service = None
-    
-    def _hotkey_start_recording(self) -> None:
-        """Handle hotkey-triggered recording start."""
-        try:
-            # Use QTimer.singleShot to ensure we're in the main thread
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, self._do_hotkey_start)
-        except Exception as e:
-            logger.error(f"Error in hotkey start recording: {e}")
-    
-    def _hotkey_stop_recording(self) -> None:
-        """Handle hotkey-triggered recording stop."""
-        try:
-            # Use QTimer.singleShot to ensure we're in the main thread
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, self._do_hotkey_stop)
-        except Exception as e:
-            logger.error(f"Error in hotkey stop recording: {e}")
-    
-    def _do_hotkey_start(self) -> None:
-        """Execute hotkey start in main thread."""
-        try:
-            # Only start if not already recording
-            if "Record" in self.record_btn.text():
-                logger.info("Hotkey triggered: Starting recording")
-                self._safe_start_record()
-        except Exception as e:
-            logger.error(f"Error executing hotkey start: {e}")
-    
-    def _do_hotkey_stop(self) -> None:
-        """Execute hotkey stop in main thread.""" 
-        try:
-            # Only stop if currently recording
-            if "Stop" in self.record_btn.text():
-                logger.info("Hotkey triggered: Stopping recording")
-                self._safe_stop_record()
-        except Exception as e:
-            logger.error(f"Error executing hotkey stop: {e}")
-    
-    def _hotkey_error(self, error_msg: str) -> None:
-        """Handle hotkey service errors."""
-        logger.error(f"Hotkey service error: {error_msg}")
-        self.show_status(f"Hotkey error: {error_msg}", error=True)
 
     def _handle_recording_error(self, error_message: str) -> None:
         """Handle recording errors and reset UI state.
@@ -3712,20 +3344,7 @@ class IntakeWindow(QMainWindow):
                 # return
         
         try:
-            # Stop global hotkeys
-            if hasattr(self, 'hotkey_service') and self.hotkey_service:
-                print(f"DEBUG: Stopping global hotkeys")
-                self.hotkey_service.stop_hotkeys()
-            
-            # Cancel any pending transcription (improved system)
-            if self.using_improved_threading and hasattr(self, 'transcription_adapter'):
-                print(f"DEBUG: Cancelling improved transcription")
-                try:
-                    self.transcription_adapter.cancel_current_transcription()
-                except Exception as e:
-                    print(f"DEBUG: Error cancelling improved transcription: {e}")
-            
-            # Cancel any pending transcription (legacy system)
+            # Cancel any pending transcription
             if hasattr(self, 'current_future') and self.current_future:
                 print(f"DEBUG: Cancelling pending transcription future")
                 self.current_future.cancel()
@@ -3740,14 +3359,6 @@ class IntakeWindow(QMainWindow):
                     self.recorder.stream = None
                 except Exception as e:
                     print(f"DEBUG: Error stopping recorder: {e}")
-            
-            # Stop enhanced resource monitoring
-            if self.using_improved_threading and hasattr(self, 'enhanced_resource_monitor'):
-                print(f"DEBUG: Stopping enhanced resource monitor")
-                try:
-                    self.enhanced_resource_monitor.stop_monitoring()
-                except Exception as e:
-                    print(f"DEBUG: Error stopping resource monitor: {e}")
             
             # Shutdown executor with timeout to prevent resource leaks
             if hasattr(self, 'executor'):
@@ -3775,12 +3386,11 @@ class IntakeWindow(QMainWindow):
                         pass
             
             # Stop all timers
-            for timer_name in ['timer', 'wave_timer', 'progress_timer', 'transcription_timeout', 'clear_timer', '_device_monitoring_timer', '_resource_timer']:
+            for timer_name in ['timer', 'wave_timer', 'progress_timer', 'transcription_timeout', 'clear_timer']:
                 if hasattr(self, timer_name):
                     timer = getattr(self, timer_name)
                     if timer and hasattr(timer, 'stop'):
                         timer.stop()
-                        print(f"DEBUG: Stopped {timer_name}")
             
             print(f"DEBUG: Cleanup completed successfully")
             

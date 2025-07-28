@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Intake Settings</title>
+<style>
+  body { font-family: sans-serif; margin: 20px; }
+  label { display:block; margin:8px 0 4px; }
+  .btn-row{ margin-top:20px; }
+</style>
+</head>
+<body>
+<h1>Intake Settings</h1>
+<form id="settingsForm">
+  <label><input type="checkbox" id="persistentAudio"> Persistent Audio Stream</label>
+  <button type="button" id="toggleBtn">Enable</button>
+
+  <label for="deviceSelect">Select Audio Device</label>
+  <select id="deviceSelect"></select>
+
+  <label for="backendSelect">Whisper Backend</label>
+  <select id="backendSelect">
+    <option value="WhisperCPP">WhisperCPP</option>
+    <option value="FasterWhisper">FasterWhisper</option>
+    <option value="StandardWhisper">StandardWhisper</option>
+  </select>
+
+  <label for="modelSelect">Whisper Model</label>
+  <select id="modelSelect">
+    <option value="small">small</option>
+    <option value="medium">medium</option>
+    <option value="large">large</option>
+  </select>
+
+  <div class="btn-row">
+    <button type="submit">Save</button>
+    <button type="button" id="cancelBtn">Cancel</button>
+  </div>
+</form>
+<script>
+  const checkbox = document.getElementById('persistentAudio');
+  const toggle = document.getElementById('toggleBtn');
+  checkbox.addEventListener('change', () => {
+    toggle.textContent = checkbox.checked ? 'Disable' : 'Enable';
+  });
+  toggle.addEventListener('click', () => {
+    checkbox.checked = !checkbox.checked;
+    toggle.textContent = checkbox.checked ? 'Disable' : 'Enable';
+  });
+</script>
+</body>
+</html>

@@ -416,7 +416,7 @@ class TestTranscriptionPerformance(unittest.TestCase):
         """Test which backends are available on the current system."""
         print("\n=== Backend Availability Test ===")
         
-        from source.dictation_backends import get_available_backends, check_backend
+        from backend.services.dictation import get_available_backends, check_backend
         
         available_backends = get_available_backends()
         print(f"Available backends: {available_backends}")

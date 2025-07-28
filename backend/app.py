@@ -8,7 +8,7 @@ from uuid import uuid4
 from starlette.concurrency import run_in_threadpool
 
 from backend.db import init_db, execute, DB_PATH
-from source.language_service import LanguageService
+from backend.services.language_service.language_service import LanguageService
 import json
 import subprocess
 import re
@@ -67,7 +67,7 @@ def suggest_fix(payload: Dict) -> Dict:
     trace = "\n".join(payload.get("traceback", "").splitlines()[-5:])
     prompt = f"Here is a traceback for {payload.get('path', '')}:\n{trace}\nSuggest a fix."
     try:
-        from source.language_service import LanguageService
+        from backend.services.language_service.language_service import LanguageService
 
         svc = LanguageService()
         resp = svc.complete_turn("suggest_fix", {"prompt": prompt})
@@ -498,7 +498,7 @@ def _run_diagnostics() -> list[dict]:
     except Exception as e:
         checks.append({"check": "Database", "status": "fail", "details": str(e)})
     try:
-        from source.language_service import LanguageService
+        from backend.services.language_service.language_service import LanguageService
 
         svc = LanguageService()
         svc.complete_chat([{"role": "user", "content": "ping"}])

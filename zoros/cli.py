@@ -8,11 +8,11 @@ Architecture: docs/zoros_architecture.md#component-overview
 Tests: tests/test_cli_entry.py
 Related Modules:
 - zoros.logger - logging utilities
-- source.interfaces.intake.main - PySide intake UI
+- backend.interfaces.intake.main - PySide intake UI
 
 Dependencies:
 - External libraries: typer, PySide6 (optional)
-- Internal modules: source.* packages
+- Internal modules: backend.* packages
 """
 from __future__ import annotations
 from zoros.logger import get_logger, LOG_DIR, DB_PATH
@@ -33,7 +33,7 @@ import typer
 
 # Reuse existing modules
 try:
-    from source.language_service import LanguageService
+    from backend.services.language_service.language_service import LanguageService
 except Exception:  # pragma: no cover - optional import during tests
     LanguageService = None  # type: ignore
 
@@ -132,7 +132,7 @@ def intake(
         # Kill existing intake processes
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "source.interfaces.intake.main"], 
+                ["pgrep", "-f", "backend.interfaces.intake.main"], 
                 capture_output=True, text=True
             )
             if result.returncode == 0:
@@ -155,7 +155,7 @@ def intake(
         if background:
             # Launch in background mode (old behavior) - with visible output
             _cprint("⚠️  Background mode selected", "yellow")
-            cmd = [sys.executable, "-m", "source.interfaces.intake.main"]
+            cmd = [sys.executable, "-m", "backend.interfaces.intake.main"]
             if headless:
                 cmd.append("--headless")
             
@@ -173,7 +173,7 @@ def intake(
             _cprint("This may take a moment to load dependencies...", "yellow")
             
             import importlib
-            intake_main = importlib.import_module("source.interfaces.intake.main")
+            intake_main = importlib.import_module("backend.interfaces.intake.main")
             
             # Set up sys.argv properly for the intake main function
             original_argv = sys.argv[:]
@@ -518,7 +518,7 @@ def audio_test(
         # Test 2: Memory and thread baseline
         import threading
         import time
-        from source.interfaces.intake.main import _mem_usage_mb
+        from backend.interfaces.intake.main import _mem_usage_mb
         
         initial_memory = _mem_usage_mb()
         initial_threads = threading.active_count()
@@ -527,7 +527,7 @@ def audio_test(
         # Test 3: Bus error protection
         _cprint("Testing bus error protection...", "yellow")
         try:
-            from source.interfaces.intake.main import transcribe_audio
+            from backend.interfaces.intake.main import transcribe_audio
             import tempfile
             import soundfile as sf
             import numpy as np
