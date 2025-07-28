@@ -63,6 +63,15 @@ from backend.services.dictation import (
     check_backend,
 )
 from backend.services.hotkey_service import get_hotkey_service
+
+# Improved threading services
+try:
+    from backend.services.intake_transcription_adapter import create_intake_adapter
+    from backend.services.enhanced_resource_monitor import get_resource_monitor
+    IMPROVED_THREADING_AVAILABLE = True
+except ImportError:
+    IMPROVED_THREADING_AVAILABLE = False
+    
 # Optional imports for specialized backends - these will be loaded via registry
 try:
     from backend.services.dictation.live_chunk_processor import LiveChunkProcessor
@@ -76,7 +85,7 @@ try:
 except ImportError:
     STABILITY_AVAILABLE = False
 try:  # optional PySide6 imports
-    from PySide6.QtCore import Qt, QTimer, Signal
+    from PySide6.QtCore import Qt, QTimer, Signal, QMutex, QMutexLocker
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import (
         QApplication,
@@ -1437,10 +1446,40 @@ class IntakeWindow(QMainWindow):
             self._init_unified_ui()
             return
         self.recorder = Recorder()
-        self.executor = ThreadPoolExecutor(max_workers=1)
+        
+        # Initialize improved threading services
+        self.using_improved_threading = False
+        if IMPROVED_THREADING_AVAILABLE:
+            try:
+                # New signal-based transcription adapter (replaces ThreadPoolExecutor)
+                self.transcription_adapter = create_intake_adapter(timeout_seconds=60)
+                # Enhanced resource monitor (replaces basic ResourceMonitor)
+                self.enhanced_resource_monitor = get_resource_monitor()
+                # Thread synchronization
+                self._state_mutex = QMutex()
+                self._transcribing_state = False
+                self.using_improved_threading = True
+                logger.info("✅ Improved threading services initialized")
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize improved threading services: {e}")
+                # Fallback to legacy system
+                self.using_improved_threading = False
+                self.executor = ThreadPoolExecutor(max_workers=1)
+                self._resource_monitor = ResourceMonitor()
+                self._start_resource_monitoring()
+                logger.warning("⚠️ Falling back to legacy threading due to initialization error")
+        else:
+            # Fallback to legacy system
+            self.executor = ThreadPoolExecutor(max_workers=1)
+            if hasattr(self, '_start_resource_monitoring'):
+                self._resource_monitor = ResourceMonitor()
+                self._start_resource_monitoring()
+            logger.warning("⚠️ Using legacy threading - improved services not available")
+        
+        # Common state variables
         self.audio_path: Optional[Path] = None
         self.backend_instance: Optional[object] = None
-        self.current_future: Optional[object] = None
+        self.current_future: Optional[object] = None  # Keep for legacy compatibility
         
         # Live transcription components
         self.live_backend = None
@@ -1452,15 +1491,11 @@ class IntakeWindow(QMainWindow):
         self.current_backend = None
         self.current_model = None
         
-        # Emergency robustness components
+        # Emergency robustness components (keep for compatibility)
         self._recording_lock = threading.RLock()
         self._recording_stuck_detected = False
-        self._resource_monitor = ResourceMonitor()
         self._semaphore_tracker = SemaphoreTracker()
         self._initial_thread_count = threading.active_count()
-        
-        # Start resource monitoring
-        self._start_resource_monitoring()
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -1630,6 +1665,19 @@ class IntakeWindow(QMainWindow):
         self.stop_timeout_signal.connect(self._stop_timeout_timer)
         self.finish_transcription_signal.connect(self._finish_transcription)
         self.live_transcript_update_signal.connect(self._handle_live_transcript_update)
+        
+        # Connect improved threading signals
+        if self.using_improved_threading and hasattr(self, 'transcription_adapter'):
+            try:
+                self._connect_improved_transcription_signals()
+                self._connect_enhanced_resource_signals()
+                # Start enhanced resource monitoring
+                if hasattr(self, 'enhanced_resource_monitor'):
+                    self.enhanced_resource_monitor.start_monitoring()
+                logger.info("✅ Connected improved threading signals")
+            except Exception as e:
+                logger.error(f"❌ Failed to connect improved threading signals: {e}")
+                logger.warning("⚠️ Improved threading may not work correctly")
         
         # Register with window manager
         try:
@@ -2433,6 +2481,21 @@ class IntakeWindow(QMainWindow):
                 self.pipeline_start_time = self.transcribe_start  # Mark pipeline start
                 print(f"DEBUG: Pipeline start time: {self.pipeline_start_time}")
                 
+                # Store recording duration for improved transcription service
+                self.recording_duration = recording_duration
+                
+                # Try improved transcription system first
+                if self.using_improved_threading and hasattr(self, 'transcription_adapter'):
+                    logger.info("🚀 Using improved transcription system")
+                    success = self._submit_improved_transcription(self.audio_path)
+                    if success:
+                        print(f"DEBUG: Improved transcription submitted successfully")
+                        return  # Exit early - signals will handle the rest
+                    else:
+                        logger.warning("⚠️ Improved transcription failed, falling back to legacy")
+                
+                # Legacy transcription system (fallback)
+                logger.info("📝 Using legacy transcription system")
                 if self.backend_instance is not None:
                     def _run(path: str) -> str:
                         print(f"DEBUG: Starting transcription in thread with backend instance")
@@ -3325,9 +3388,197 @@ class IntakeWindow(QMainWindow):
         
         print(f"DEBUG: Clearing audio_path...")
         self.audio_path = None
+        
+        # Reset UI state - this was missing and causing the button to stay on "Transcribing..."
+        print(f"DEBUG: Resetting UI state...")
+        self.record_btn.setText("🔴 Record")
+        self.record_btn.setStyleSheet("")
+        self.record_btn.setEnabled(True)
+        print(f"DEBUG: Record button reset to Record state")
+        
         print(f"DEBUG: _finish_transcription completed")
 
 
+
+    def _connect_improved_transcription_signals(self) -> None:
+        """Connect signals from the improved transcription adapter."""
+        if not hasattr(self, 'transcription_adapter'):
+            return
+        
+        # Primary transcription signals
+        self.transcription_adapter.transcription_started.connect(self._on_improved_transcription_started)
+        self.transcription_adapter.transcription_completed.connect(self._on_improved_transcription_completed)
+        self.transcription_adapter.transcription_failed.connect(self._on_improved_transcription_failed)
+        self.transcription_adapter.transcription_progress.connect(self._on_improved_transcription_progress)
+        self.transcription_adapter.transcription_timeout.connect(self._on_improved_transcription_timeout)
+        
+        # Resource monitoring signals
+        self.transcription_adapter.resource_warning.connect(self._on_improved_resource_warning)
+        self.transcription_adapter.service_stats_updated.connect(self._on_improved_service_stats)
+        
+        logger.info("✅ Connected improved transcription signals")
+    
+    def _connect_enhanced_resource_signals(self) -> None:
+        """Connect signals from the enhanced resource monitor."""
+        if not hasattr(self, 'enhanced_resource_monitor'):
+            return
+        
+        # Resource monitoring signals
+        self.enhanced_resource_monitor.resource_warning.connect(self._on_enhanced_resource_warning)
+        self.enhanced_resource_monitor.resource_critical.connect(self._on_enhanced_resource_critical)
+        self.enhanced_resource_monitor.cleanup_triggered.connect(self._on_enhanced_cleanup_triggered)
+        self.enhanced_resource_monitor.resource_recovered.connect(self._on_enhanced_resource_recovered)
+        
+        logger.info("✅ Connected enhanced resource monitor signals")
+    
+    # Improved transcription signal handlers
+    
+    def _on_improved_transcription_started(self) -> None:
+        """Handle improved transcription started signal."""
+        with QMutexLocker(self._state_mutex):
+            self._transcribing_state = True
+        
+        logger.info("🔄 Improved transcription started")
+        # Update UI to show transcription in progress
+        if hasattr(self, 'record_btn'):
+            self.record_btn.setText("🔄 Transcribing...")
+            self.record_btn.setEnabled(False)
+    
+    def _on_improved_transcription_completed(self, result: str) -> None:
+        """Handle improved transcription completed signal."""
+        with QMutexLocker(self._state_mutex):
+            self._transcribing_state = False
+        
+        logger.info(f"✅ Improved transcription completed: {result[:100]}...")
+        
+        # Use the existing _finish_transcription method for consistency
+        self._finish_transcription(result)
+        
+        # Additional safety check to ensure UI is reset (in case _finish_transcription doesn't work)
+        if hasattr(self, 'record_btn'):
+            self.record_btn.setText("🔴 Record")
+            self.record_btn.setEnabled(True)
+            logger.debug("🔄 UI state reset confirmed in improved transcription completion")
+    
+    def _on_improved_transcription_failed(self, error: str) -> None:
+        """Handle improved transcription failed signal."""
+        with QMutexLocker(self._state_mutex):
+            self._transcribing_state = False
+        
+        logger.error(f"❌ Improved transcription failed: {error}")
+        
+        # Show error in UI and reset state
+        if hasattr(self, 'transcript_display'):
+            self.transcript_display.setPlainText(f"Transcription failed: {error}")
+        if hasattr(self, 'record_btn'):
+            self.record_btn.setText("🔴 Record")
+            self.record_btn.setEnabled(True)
+        
+        # Show error message briefly
+        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
+            self.status.showMessage(f"Transcription failed: {error}", 5000)
+    
+    def _on_improved_transcription_progress(self, progress: float) -> None:
+        """Handle improved transcription progress update."""
+        progress_percent = int(progress * 100)
+        logger.debug(f"📊 Transcription progress: {progress_percent}%")
+        
+        # Update status bar if available
+        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
+            self.status.showMessage(f"Transcribing... {progress_percent}%", 1000)
+    
+    def _on_improved_transcription_timeout(self) -> None:
+        """Handle improved transcription timeout."""
+        with QMutexLocker(self._state_mutex):
+            self._transcribing_state = False
+        
+        logger.warning("⏱️ Improved transcription timed out")
+        
+        # Show timeout message and reset UI
+        if hasattr(self, 'transcript_display'):
+            self.transcript_display.setPlainText("Transcription timed out. Please try again.")
+        if hasattr(self, 'record_btn'):
+            self.record_btn.setText("🔴 Record")
+            self.record_btn.setEnabled(True)
+        
+        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
+            self.status.showMessage("Transcription timed out", 5000)
+    
+    def _on_improved_resource_warning(self, resource_type: str, message: str) -> None:
+        """Handle resource warning from transcription adapter."""
+        logger.warning(f"⚠️ Resource warning: {resource_type} - {message}")
+        
+        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
+            self.status.showMessage(f"Resource warning: {resource_type}", 3000)
+    
+    def _on_improved_service_stats(self, stats: dict) -> None:
+        """Handle service statistics update."""
+        logger.debug(f"📊 Service stats: {stats}")
+        # Could update a status display or log performance metrics
+    
+    # Enhanced resource monitor signal handlers
+    
+    def _on_enhanced_resource_warning(self, resource_type: str, message: str) -> None:
+        """Handle enhanced resource monitor warning."""
+        logger.warning(f"⚠️ Enhanced resource warning: {resource_type} - {message}")
+    
+    def _on_enhanced_resource_critical(self, resource_type: str, message: str) -> None:
+        """Handle critical resource issue from enhanced monitor."""
+        logger.error(f"🚨 CRITICAL resource issue: {resource_type} - {message}")
+        
+        # For critical memory issues, cancel current transcription
+        if "memory" in resource_type and self._transcribing_state:
+            logger.warning("🛑 Cancelling transcription due to critical memory issue")
+            if hasattr(self, 'transcription_adapter'):
+                self.transcription_adapter.cancel_current_transcription()
+        
+        # Show critical alert
+        if hasattr(self, 'status') and hasattr(self.status, 'showMessage'):
+            self.status.showMessage(f"CRITICAL: {resource_type} issue", 10000)
+    
+    def _on_enhanced_cleanup_triggered(self, cleanup_type: str) -> None:
+        """Handle cleanup triggered event."""
+        logger.info(f"🧹 Enhanced cleanup triggered: {cleanup_type}")
+    
+    def _on_enhanced_resource_recovered(self, resource_type: str) -> None:
+        """Handle resource recovery."""
+        logger.info(f"✅ Resource recovered: {resource_type}")
+    
+    def _submit_improved_transcription(self, audio_path: Path) -> bool:
+        """Submit transcription using the improved threading system."""
+        if not self.using_improved_threading or not hasattr(self, 'transcription_adapter'):
+            logger.warning("Improved threading not available, falling back to legacy")
+            return False
+        
+        try:
+            # Get backend and model settings
+            backend = getattr(self, 'whisper_backend', 'MLXWhisper')
+            model = getattr(self, 'whisper_model', 'large-v3-turbo')
+            
+            logger.info(f"🚀 Submitting improved transcription: {audio_path} -> {backend}/{model}")
+            
+            # Submit transcription to improved service
+            success = self.transcription_adapter.submit_transcription(
+                audio_path=audio_path,
+                backend=backend,
+                model=model,
+                metadata={
+                    'source': 'intake_ui',
+                    'timestamp': time.time(),
+                    'recording_duration': getattr(self, 'recording_duration', 0)
+                }
+            )
+            
+            if success:
+                logger.info("✅ Improved transcription submitted successfully")
+                return True
+            else:
+                logger.error("❌ Failed to submit improved transcription")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error submitting improved transcription: {e}")
+            return False
 
     def _setup_hotkey_service(self) -> None:
         """Initialize and configure the global hotkey service."""
@@ -3466,7 +3717,15 @@ class IntakeWindow(QMainWindow):
                 print(f"DEBUG: Stopping global hotkeys")
                 self.hotkey_service.stop_hotkeys()
             
-            # Cancel any pending transcription
+            # Cancel any pending transcription (improved system)
+            if self.using_improved_threading and hasattr(self, 'transcription_adapter'):
+                print(f"DEBUG: Cancelling improved transcription")
+                try:
+                    self.transcription_adapter.cancel_current_transcription()
+                except Exception as e:
+                    print(f"DEBUG: Error cancelling improved transcription: {e}")
+            
+            # Cancel any pending transcription (legacy system)
             if hasattr(self, 'current_future') and self.current_future:
                 print(f"DEBUG: Cancelling pending transcription future")
                 self.current_future.cancel()
@@ -3481,6 +3740,14 @@ class IntakeWindow(QMainWindow):
                     self.recorder.stream = None
                 except Exception as e:
                     print(f"DEBUG: Error stopping recorder: {e}")
+            
+            # Stop enhanced resource monitoring
+            if self.using_improved_threading and hasattr(self, 'enhanced_resource_monitor'):
+                print(f"DEBUG: Stopping enhanced resource monitor")
+                try:
+                    self.enhanced_resource_monitor.stop_monitoring()
+                except Exception as e:
+                    print(f"DEBUG: Error stopping resource monitor: {e}")
             
             # Shutdown executor with timeout to prevent resource leaks
             if hasattr(self, 'executor'):
