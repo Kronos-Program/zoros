@@ -75,6 +75,13 @@ class BackendRegistry:
                 description="Standard OpenAI Whisper backend"
             ),
             BackendInfo(
+                name="WhisperFlow",
+                class_name="WhisperFlowBackend",
+                module_path="backend.services.dictation.whisperflow_backend",
+                dependencies=["whisperflow"],
+                description="WhisperFlow backend with streaming optimizations"
+            ),
+            BackendInfo(
                 name="OpenAIAPI",
                 class_name="OpenAIAPIBackend",
                 module_path="backend.services.dictation.openai_api_backend",
@@ -86,7 +93,7 @@ class BackendRegistry:
                 name="MLXWhisper",
                 class_name="MLXWhisperBackend",
                 module_path="backend.services.dictation.mlx_whisper_backend",
-                dependencies=["mlx_whisper"],
+                dependencies=["mlx_whisper", "mlx"],
                 description="MLX Whisper backend for Apple Silicon",
                 platform_requirements=["macOS with Apple Silicon"]
             ),

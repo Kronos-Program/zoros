@@ -1,5 +1,0 @@
-turn_id: fibrizer_chain
-handler: source.orchestration.fibrizers.chain_fibrizer:ChainFibrizer
-io:
-  input: Fiber
-  output: Fiber[]

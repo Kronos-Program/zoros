@@ -1,1 +1,0 @@
-"Zoros core package"

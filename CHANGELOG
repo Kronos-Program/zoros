@@ -1,0 +1,12 @@
+# Changelog
+
+## [0.2.0]
+
+### Changed
+
+- Rearchitected the dictation system for simplicity and stability
+- Massively pruned explorary and unnecessary subsystems for core dictation functionality
+
+## [0.1.0]
+
+Initial release, very messy

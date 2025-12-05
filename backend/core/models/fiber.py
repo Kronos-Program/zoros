@@ -50,9 +50,9 @@ class Fiber(BaseModel):
             self.tags.remove(norm)
 
     def generate_summary(self) -> str:
-        """Return a short summary using LanguageService if available."""
+        """Return a short summary using SpindleSpeak if available."""
         try:
-            from source.language_service import LanguageService
+            from backend.services.language_service.language_service import LanguageService
 
             service = LanguageService()
             resp = service.complete_turn(str(self.id), {"content": self.content})

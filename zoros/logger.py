@@ -88,19 +88,44 @@ def _increment_error(record: logging.LogRecord) -> bool:
 def get_logger(name: str) -> logging.Logger:
     cfg = _load_config()
     logger = logging.getLogger(name)
+
+    # Ensure handlers are attached once with consistent formatting
     if not logger.handlers:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(LOG_DIR / f"{name}.log")
         fmt = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
+
+        fh = logging.FileHandler(LOG_DIR / f"{name}.log")
         fh.setFormatter(fmt)
         logger.addHandler(fh)
+
         logger.addHandler(SQLiteHandler())
+
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
         logger.addHandler(sh)
+
+    # Resolve level from config with module override
     level = cfg.get("modules", {}).get(name, cfg.get("default_level", "INFO"))
     lvl = getattr(logging, str(level).upper(), logging.INFO)
-    if cfg.get("suppress_debug") and lvl < logging.INFO:
+
+    suppress = bool(cfg.get("suppress_debug"))
+    if suppress and lvl < logging.INFO:
+        # Override any DEBUG/NOTSET to INFO when suppression is enabled
         lvl = logging.INFO
+
+    # Apply computed level to the logger
     logger.setLevel(lvl)
+
+    # When suppressing debug, guard handlers too in case logger level is later changed.
+    if suppress:
+        class _NoDebugFilter(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
+                # Allow INFO and above; drop DEBUG/NOTSET
+                return record.levelno >= logging.INFO
+
+        for h in logger.handlers:
+            # Ensure handlers won't emit DEBUG even if logger level changes elsewhere
+            h.setLevel(max(getattr(h, "level", logging.NOTSET) or logging.NOTSET, logging.INFO))
+            h.addFilter(_NoDebugFilter())
+
     return logger

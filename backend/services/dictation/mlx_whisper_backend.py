@@ -14,65 +14,28 @@ class MLXWhisperBackend(WhisperBackend):
     def transcribe(self, wav_path: str) -> str:
         import mlx_whisper
         import gc
-        
-        # Use the turbo model for large-v3-turbo, otherwise use model_name as HF repo
-        if self.model_name == "large-v3-turbo":
-            repo = "mlx-community/whisper-turbo"
-        else:
-            repo = self.model_name
-        
-        # Check if we have a cached model
-        if self._model_cache is None:
-            print(f"DEBUG: Loading MLX model {repo} for first time")
-            # Load model once and cache it
-            try:
-                self._model_cache = mlx_whisper.load_models(repo)
-                print(f"DEBUG: MLX model {repo} loaded and cached")
-            except Exception as e:
-                print(f"DEBUG: MLX model loading failed, falling back to transcribe: {e}")
-                # Fallback to direct transcribe if load_model fails
-                out = mlx_whisper.transcribe(
-                    wav_path, 
-                    path_or_hf_repo=repo,
-                    fp16=True,
-                    word_timestamps=False,
-                    temperature=0.0,
-                    condition_on_previous_text=False
-                )
-                return out.get("text", "").strip() if out else ""
-        
-        # Use cached model for transcription
+
+        repo = "mlx-community/whisper-turbo" if self.model_name == "large-v3-turbo" else self.model_name
+
         try:
-            if hasattr(mlx_whisper, 'transcribe_with_model') and self._model_cache:
-                # Use cached model if API supports it
-                out = mlx_whisper.transcribe_with_model(
-                    self._model_cache,
-                    wav_path,
-                    fp16=True,
-                    word_timestamps=False,
-                    temperature=0.0,
-                    condition_on_previous_text=False
-                )
-            else:
-                # Fallback to regular transcribe
-                out = mlx_whisper.transcribe(
-                    wav_path, 
-                    path_or_hf_repo=repo,
-                    fp16=True,
-                    word_timestamps=False,
-                    temperature=0.0,
-                    condition_on_previous_text=False
-                )
+            # Call transcribe directly; avoid caching complications
+            out = mlx_whisper.transcribe(
+                wav_path,
+                path_or_hf_repo=repo,
+                fp16=True,
+                word_timestamps=False,
+                temperature=0.0,
+                condition_on_previous_text=False,
+            )
         except Exception as e:
             print(f"DEBUG: MLX transcription error: {e}")
-            # Force garbage collection on error
-            self._model_cache = None
+            # Explicitly bail on ffmpeg missing rather than looping
+            if "ffmpeg" in str(e):
+                raise RuntimeError("FFmpeg is required for MLX transcription; install ffmpeg and retry") from e
             gc.collect()
             return ""
-        
-        # Force garbage collection after transcription to free temporary memory
+
         gc.collect()
-        
         return out.get("text", "").strip() if out else ""
     
     def cleanup(self):
